@@ -27,6 +27,8 @@ API_LATEST = "https://api.github.com/repos/{repo}/releases/latest"
 USER_AGENT = f"{APP_NAME}-Updater/{__version__}"
 TIMEOUT_S = 15
 CHUNK = 256 * 1024
+WORK_DIR_PREFIX = f"{APP_NAME}-update-"
+STALE_WORK_DIR_S = 3600  # startup cleanup skips staging folders younger than this
 
 Opener = Callable[..., Any]          # same signature as urllib.request.urlopen
 ProgressFn = Callable[[int, int], None]  # (bytes done, bytes total or 0)
@@ -255,12 +257,52 @@ def stage_update(info: ReleaseInfo, work_dir: Path, progress: ProgressFn | None 
 
 def default_work_dir() -> Path:
     import tempfile
-    return Path(tempfile.gettempdir()) / f"{APP_NAME}-update-{datetime.now():%Y%m%d_%H%M%S}"
+    return Path(tempfile.gettempdir()) / f"{WORK_DIR_PREFIX}{datetime.now():%Y%m%d_%H%M%S}"
+
+
+def remove_work_dir(path: Path) -> bool:
+    """Delete one staging folder. Refuses any folder whose name lacks the update prefix."""
+    path = Path(path)
+    if not path.name.startswith(WORK_DIR_PREFIX) or path.is_symlink() or not path.is_dir():
+        return False
+    shutil.rmtree(path, ignore_errors=True)
+    return not path.exists()
+
+
+def cleanup_work_dirs(root: Path | None = None, min_age_s: float = STALE_WORK_DIR_S,
+                      now: float | None = None) -> list[Path]:
+    """Delete leftover staging folders in the temp folder and return the ones removed.
+
+    Folders changed within ``min_age_s`` stay: another LocalTrainer window may be staging an update,
+    or the helper may still be applying one from there.
+    """
+    import tempfile
+    import time
+    root = Path(root) if root is not None else Path(tempfile.gettempdir())
+    now = time.time() if now is None else now
+    removed: list[Path] = []
+    try:
+        candidates = sorted(root.glob(WORK_DIR_PREFIX + "*"))
+    except OSError:
+        return removed
+    for path in candidates:
+        try:
+            if now - path.stat().st_mtime < min_age_s:
+                continue
+        except OSError:
+            continue
+        if remove_work_dir(path):
+            removed.append(path)
+    return removed
 
 
 def launch_helper(new_root: Path, app_root: Path, version: str, work_dir: Path,
                   python: str = sys.executable) -> subprocess.Popen:
-    """Copy the stdlib-only helper next to the staged files and start it detached from this process."""
+    """Copy the stdlib-only helper next to the staged files and start it detached from this process.
+
+    The helper runs in the app folder, not the work dir: a venv's python.exe is a launcher that keeps
+    its starting folder open until the helper exits, so the helper could not delete the work dir.
+    """
     helper_src = Path(app_root) / "utils" / "update_helper.py"
     helper = Path(work_dir) / "update_helper.py"
     shutil.copy2(helper_src, helper)
@@ -269,7 +311,7 @@ def launch_helper(new_root: Path, app_root: Path, version: str, work_dir: Path,
         flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
     return subprocess.Popen(
         [python, "-I", str(helper), "--source", str(new_root), "--target", str(app_root),
-         "--pid", str(os.getpid()), "--version", version],
-        cwd=str(work_dir), creationflags=flags, close_fds=True,
+         "--pid", str(os.getpid()), "--version", version, "--work-dir", str(work_dir)],
+        cwd=str(app_root), creationflags=flags, close_fds=True,
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )

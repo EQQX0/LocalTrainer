@@ -88,7 +88,10 @@ LocalTrainer checks GitHub quietly at startup and marks the Check for updates bu
 2. verifies its SHA-256 checksum,
 3. unpacks it to a temporary folder,
 4. closes, and a small helper backs up the current app files to `update_backups/`, copies in the new ones and restarts LocalTrainer,
-5. runs `pip install -r requirements.txt` in `.venv` if `requirements.txt` changed.
+5. runs `pip install -r requirements.txt` in `.venv` if `requirements.txt` changed,
+6. deletes the temporary folder.
+
+The dialog also deletes the temporary folder when a download fails or you cancel it. At startup, LocalTrainer deletes `%TEMP%\LocalTrainer-update-*` folders older than an hour, such as ones a crash left behind.
 
 If any step fails, the helper restores the backup and LocalTrainer tells you on the next start. The updater never touches `projects/`, `settings.json`, `.venv` or downloaded weights, and it needs no admin rights. It also handles no internet, GitHub's rate limit of 60 checks per hour and a release without assets.
 

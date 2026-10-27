@@ -25,6 +25,7 @@ PROTECTED = {
     "update_backups", "update_status.json", "update.log", ".git",
 }
 KEEP_BACKUPS = 3
+WORK_DIR_PREFIX = "LocalTrainer-update-"  # same as core.updater; this file cannot import the app
 
 LogFn = Callable[[str], None]
 
@@ -161,6 +162,15 @@ def prune_backups(root: Path, keep: int = KEEP_BACKUPS) -> None:
         shutil.rmtree(old, ignore_errors=True)
 
 
+def remove_work_dir(work_dir: Path, log: LogFn) -> None:
+    """Delete the temp folder that held the download and this script (Python has already read it)."""
+    work_dir = Path(work_dir)
+    if not work_dir.name.startswith(WORK_DIR_PREFIX) or not work_dir.is_dir():
+        return
+    shutil.rmtree(work_dir, ignore_errors=True)
+    log(f"Could not delete {work_dir}." if work_dir.exists() else f"Deleted {work_dir}.")
+
+
 def relaunch(target: Path, python: Path | None) -> None:
     run_bat = Path(target) / "run.bat"
     if os.name == "nt" and run_bat.is_file():
@@ -171,7 +181,7 @@ def relaunch(target: Path, python: Path | None) -> None:
 
 
 def run(source: Path, target: Path, version: str, pid: int = 0, do_relaunch: bool = True,
-        pip: Callable[[Path, Path, LogFn], bool] = run_pip) -> bool:
+        pip: Callable[[Path, Path, LogFn], bool] = run_pip, work_dir: Path | None = None) -> bool:
     """Full update. Returns True on success. Always leaves a status file for the app."""
     target = Path(target)
     log_file = target / "update.log"
@@ -203,6 +213,8 @@ def run(source: Path, target: Path, version: str, pid: int = 0, do_relaunch: boo
         log(message)
     write_status(target, ok, version, message)
     log(message)
+    if work_dir is not None:
+        remove_work_dir(work_dir, log)
     if do_relaunch:
         relaunch(target, python)
     return ok
@@ -215,8 +227,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--version", required=True)
     ap.add_argument("--pid", type=int, default=0)
     ap.add_argument("--no-relaunch", action="store_true")
+    ap.add_argument("--work-dir", type=Path, help="temp folder to delete when done")
     args = ap.parse_args(argv)
-    return 0 if run(args.source, args.target, args.version, args.pid, not args.no_relaunch) else 1
+    ok = run(args.source, args.target, args.version, args.pid, not args.no_relaunch, work_dir=args.work_dir)
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":

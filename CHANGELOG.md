@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Updates leave no `%TEMP%\LocalTrainer-update-<timestamp>` folders behind. The update helper deletes its folder when it finishes, and the update dialog deletes it when a download fails or you cancel it.
+- At startup, LocalTrainer deletes update folders older than an hour, including the ones 1.0.0 and 1.0.1 left. It keeps newer folders, since another LocalTrainer window may still use them.
+
 ## 1.0.1
 
 ### Added

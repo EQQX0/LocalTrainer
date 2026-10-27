@@ -9,7 +9,7 @@ from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import QApplication, QDialog, QHBoxLayout, QProgressBar, QTextBrowser, QVBoxLayout, QWidget
 
 from app.version import __version__
-from core.updater import ReleaseInfo, default_work_dir, launch_helper, stage_update
+from core.updater import ReleaseInfo, default_work_dir, launch_helper, remove_work_dir, stage_update
 from ui.theme import SP1, SP2, SP3
 from ui.widgets import Banner, Task, button, label
 from utils.fmt import fmt_bytes
@@ -115,6 +115,7 @@ class UpdateDialog(QDialog):
             app.quit()
 
     def _on_failed(self, exc: object) -> None:
+        remove_work_dir(self._work_dir)  # a cancelled or failed download leaves nothing worth keeping
         self.progress.hide()
         self.status.setText("")
         self.later_btn.setText("Later")

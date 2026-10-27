@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,7 @@ from core.jobs import WorkerProcess
 from core.predictor import find_weights
 from core.project import FAMILIES, SIZES, Project, ProjectState, TrainSettings, list_projects, validate_name
 from core.trainer import OOM_HINT, TrainConfig, TrainingSession, make_run_name, resolve_device
-from core.updater import ReleaseInfo, UpdateError, fetch_latest_release, is_newer
+from core.updater import ReleaseInfo, UpdateError, cleanup_work_dirs, fetch_latest_release, is_newer
 from core.yaml_gen import write_data_yaml
 from ui.theme import SP1, SP2, SP3, Fonts, build_qss
 from ui.update_dialog import UpdateDialog
@@ -487,6 +488,7 @@ class MainWindow(QMainWindow):
         self.gpu.start()
         self.env_job.start("envcheck", {})
         self._show_update_status()
+        threading.Thread(target=cleanup_work_dirs, name="update-cleanup", daemon=True).start()
         last = self.prefs.get("last_project")
         if last and (PROJECTS_DIR / last).is_dir():
             self._open_project(last)

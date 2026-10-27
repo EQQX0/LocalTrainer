@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import urllib.error
 import zipfile
 from email.message import Message
@@ -201,6 +202,54 @@ def test_stage_update_rejects_bad_checksum(tmp_path: Path) -> None:
     assert not (tmp_path / "work" / "extracted").exists()
 
 
+# ------------------------------------------------------------ temp folder cleanup
+
+def make_dir(root: Path, name: str, age_s: float, now: float) -> Path:
+    path = root / name
+    (path / "extracted").mkdir(parents=True)
+    (path / "LocalTrainer-1.0.1.zip").write_bytes(b"zip")
+    (path / "extracted" / "main.py").write_text("x")
+    os.utime(path, (now - age_s, now - age_s))
+    return path
+
+
+def test_cleanup_work_dirs_removes_only_old_update_folders(tmp_path: Path) -> None:
+    now = 1_800_000_000.0
+    old = make_dir(tmp_path, "LocalTrainer-update-20261001_101500", 2 * 86400, now)
+    older = make_dir(tmp_path, "LocalTrainer-update-20260901_080000", 40 * 86400, now)
+    fresh = make_dir(tmp_path, "LocalTrainer-update-20261027_120000", 60, now)
+    other = make_dir(tmp_path, "OtherApp-update-20261001_101500", 2 * 86400, now)
+    stray_file = tmp_path / "LocalTrainer-update-notes.txt"
+    stray_file.write_text("not a folder")
+    os.utime(stray_file, (now - 86400, now - 86400))
+
+    removed = up.cleanup_work_dirs(tmp_path, now=now)
+
+    assert sorted(removed) == sorted([old, older])
+    assert not old.exists() and not older.exists()
+    assert fresh.is_dir() and (fresh / "extracted" / "main.py").is_file()
+    assert other.is_dir() and stray_file.is_file()
+
+
+def test_cleanup_work_dirs_handles_missing_temp_folder(tmp_path: Path) -> None:
+    assert up.cleanup_work_dirs(tmp_path / "does-not-exist") == []
+
+
+def test_remove_work_dir_refuses_other_folders(tmp_path: Path) -> None:
+    project = tmp_path / "projects"
+    project.mkdir()
+    assert not up.remove_work_dir(project)
+    assert project.is_dir()
+    staged = tmp_path / "LocalTrainer-update-20261027_120000"
+    staged.mkdir()
+    assert up.remove_work_dir(staged) and not staged.exists()
+
+
+def test_default_work_dir_matches_cleanup_prefix() -> None:
+    assert up.default_work_dir().name.startswith(up.WORK_DIR_PREFIX)
+    assert helper.WORK_DIR_PREFIX == up.WORK_DIR_PREFIX
+
+
 # ------------------------------------------------------------ replace + rollback (helper)
 
 def make_installed_app(root: Path, requirements: str = "PyQt6>=6.7\n") -> None:
@@ -299,6 +348,43 @@ def test_run_rolls_back_when_pip_fails(tmp_path: Path) -> None:
     assert snapshot(target) == before
     status = json.loads((target / "update_status.json").read_text())
     assert not status["ok"] and "restored" in status["message"]
+
+
+@pytest.mark.parametrize("pip_ok", [True, False])
+def test_run_deletes_its_work_dir(tmp_path: Path, pip_ok: bool) -> None:
+    target = tmp_path / "LocalTrainer"
+    make_installed_app(target)
+    work = tmp_path / "LocalTrainer-update-20261027_120000"
+    work.mkdir()
+    source = extracted_package(work, requirements="PyQt6>=6.8\n")
+    (work / "update_helper.py").write_text("# the copy the app starts")
+    ok = helper.run(source, target, "1.0.1", do_relaunch=False, pip=lambda *a: pip_ok, work_dir=work)
+    assert ok is pip_ok
+    assert not work.exists()
+    assert (target / "settings.json").read_text() == '{"theme": "light"}'
+
+
+def test_run_keeps_work_dir_without_update_prefix(tmp_path: Path) -> None:
+    target = tmp_path / "LocalTrainer"
+    make_installed_app(target)
+    source = extracted_package(tmp_path)
+    ok = helper.run(source, target, "1.0.1", do_relaunch=False, pip=lambda *a: True, work_dir=tmp_path)
+    assert ok and tmp_path.is_dir() and source.is_dir()
+
+
+def test_launch_helper_passes_work_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    app_root = tmp_path / "app"
+    (app_root / "utils").mkdir(parents=True)
+    (app_root / "utils" / "update_helper.py").write_text("# helper")
+    work = tmp_path / "LocalTrainer-update-20261027_120000"
+    work.mkdir()
+    calls: list[tuple[list[str], dict[str, Any]]] = []
+    monkeypatch.setattr(up.subprocess, "Popen", lambda args, **kw: calls.append((args, kw)))
+    up.launch_helper(work / "extracted", app_root, "1.0.1", work, python="python")
+    args, kw = calls[0]
+    assert args[args.index("--work-dir") + 1] == str(work)
+    assert kw["cwd"] == str(app_root)  # never the work dir, or the venv launcher keeps it locked
+    assert (work / "update_helper.py").is_file()
 
 
 def test_protected_names_cover_user_data() -> None:
