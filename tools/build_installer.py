@@ -54,7 +54,8 @@ def build(zip_path: Path, out_dir: Path) -> Path:
         if res.returncode != 0:
             sys.exit(f"csc failed:\n{res.stdout}{res.stderr}")
     digest = hashlib.sha256(exe.read_bytes()).hexdigest()
-    (out_dir / f"{exe.name}.sha256").write_text(f"{digest}  {exe.name}\n", encoding="utf-8")
+    # newline="\n": on Windows a plain write_text gives CRLF, and `sha256sum -c` then misreads the file name
+    (out_dir / f"{exe.name}.sha256").write_text(f"{digest}  {exe.name}\n", encoding="utf-8", newline="\n")
     print(f"{exe} ({exe.stat().st_size / 1000:.0f} kB)\nsha256 {digest}")
     return exe
 

@@ -1,6 +1,7 @@
 """The installer exe builds and guards the folder it installs into (the full install is checked by hand)."""
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import subprocess
 import sys
@@ -28,7 +29,8 @@ def test_installer_builds_and_refuses_a_foreign_folder(tmp_path):
     exe = build_installer.build(zip_path, tmp_path / "dist")
     assert exe.name == "LocalTrainer-Setup-9.8.7.exe"
     assert exe.read_bytes()[:2] == b"MZ"
-    assert (tmp_path / "dist" / f"{exe.name}.sha256").read_text().endswith(f"  {exe.name}\n")
+    digest = hashlib.sha256(exe.read_bytes()).hexdigest()
+    assert (tmp_path / "dist" / f"{exe.name}.sha256").read_bytes() == f"{digest}  {exe.name}\n".encode()
 
     foreign = tmp_path / "My Documents"
     foreign.mkdir()
