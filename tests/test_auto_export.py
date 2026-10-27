@@ -158,7 +158,11 @@ def test_export_failure_does_not_fail_the_run(tmp_path: Path, fake_ultralytics: 
 
 # ------------------------------------------------------------ Qt session
 
-APP = QCoreApplication.instance() or QCoreApplication([])  # kept alive for the whole module
+try:  # a full QApplication when widgets load, so UI tests in the same run can share it
+    from PyQt6.QtWidgets import QApplication as _App
+except ImportError:
+    _App = QCoreApplication
+APP = QCoreApplication.instance() or _App([])  # kept alive for the whole module
 
 
 @pytest.fixture

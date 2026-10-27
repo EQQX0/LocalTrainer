@@ -1,11 +1,14 @@
 # LocalTrainer
 
-LocalTrainer is a Windows desktop app for training YOLO object detection models on your own GPU. You pick a labelled dataset, choose a model and press Start training. It runs [Ultralytics](https://docs.ultralytics.com) underneath, so you never open a terminal.
+LocalTrainer is a Windows desktop app for training YOLO object detection models on your own GPU. You pick a labelled dataset, choose a model and press Start training. It runs [Ultralytics](https://docs.ultralytics.com) underneath, so you never open a terminal. New to model training? Press **F1** in the app for a guide.
 
 ![LocalTrainer training a model](docs/screenshot.png)
 
 ## What it does
 
+- Starts in a simple view: model name, dataset, family, size, epochs and Start training. Advanced settings sit in closed sections you open with + and close with −. Presets (Easy, Quick test, Best accuracy) set the model size, epochs and batch for you.
+- Explains every setting. Hover the "?" next to it, or tab to it, for a short explanation in plain words.
+- Has built-in help on F1: a quick start, every setting explained, how to read the results, which model fits a 12 GB GPU, troubleshooting and a glossary, all searchable.
 - Creates one folder per model under `projects/<name>/` and keeps every run in its own `runs/run_<timestamp>/` folder, so a new run never overwrites an old one.
 - Accepts a dataset that is already split (`images/train`, `images/val`, `labels/train`, `labels/val`) or a flat `images/` + `labels/` pair, which it splits 80/20 with a fixed seed.
 - Copies the dataset into the project. Your original folder stays untouched.
@@ -33,7 +36,7 @@ Download `LocalTrainer-Setup-<version>.exe` from the [latest release](https://gi
 
 From then on, start LocalTrainer from the desktop shortcut. The installer is unsigned, so Windows may show "Windows protected your PC". Click More info, then Run anyway.
 
-To install into another folder, pass it on the command line: `LocalTrainer-Setup-1.0.3.exe "D:\Apps\LocalTrainer"`. Keep that path short. pip fails on file paths longer than 260 characters unless you turned on long paths in Windows. If you run the installer on an existing install, it keeps your projects, settings and `.venv`. It finishes a setup that stopped halfway, then starts the app. The in-app updater handles newer versions.
+To install into another folder, pass it on the command line: `LocalTrainer-Setup-1.1.0.exe "D:\Apps\LocalTrainer"`. Keep that path short. pip fails on file paths longer than 260 characters unless you turned on long paths in Windows. If you run the installer on an existing install, it keeps your projects, settings and `.venv`. It finishes a setup that stopped halfway, then starts the app. The in-app updater handles newer versions.
 
 ### Setup from the zip
 
@@ -57,7 +60,9 @@ py -3.13 -m venv .venv
 2. **Choose the dataset folder.** Point it at the folder that holds `images/` and `labels/`. The sidebar shows the layout it found. For a flat folder, set the val share (20 % by default).
 3. **Check the classes.** LocalTrainer fills the list from `classes.txt` or `data.yaml`. Without either file, it counts the class ids in your labels and asks you to name each one, in id order.
 4. **Validate and prepare.** LocalTrainer checks every image and label and shows a report with boxes per class, missing labels and invalid files. A clean dataset gets copied to `projects/<name>/dataset/`, and LocalTrainer writes `projects/<name>/data.yaml` with absolute paths.
-5. **Pick the model and settings.** Family (yolo26, yolo11, yolov8) and size (n, s, m, l, x) build the weights name, for example `yolo26s.pt`. The defaults are 100 epochs, 640 px, batch 16, 4 workers and patience 50. Tick Auto to let Ultralytics choose the batch size. Auto-export ONNX after training is on by default. Hover any setting for an explanation.
+5. **Pick the model and settings.** Start with a preset: Quick test checks that everything works in a few minutes, Easy suits most datasets, Best accuracy takes longest. Family (yolo26, yolo11, yolov8) and size (n, s, m, l, x) build the weights name, for example `yolo26s.pt`. The defaults are 100 epochs, 640 px, batch 16, 4 workers and patience 50. The other settings sit in the Training, Hardware, Data and Output sections, closed until you click their header. A dot on a header means you changed something inside; Reset to defaults undoes it. Hover the "?" next to any setting for an explanation.
+
+   ![A setting's explanation](docs/tooltip.png)
 6. **Start training.** The progress bar, log, metric tiles and chart update live. The window stays responsive because training runs in a separate process.
 7. **Stop if you need to.** Stop training finishes the current batch, validates, and saves `last.pt` and `best.pt`. Press it a second time to force stop; the run keeps any weights saved so far.
 8. **Get the ONNX file.** With Auto-export ONNX ticked, LocalTrainer writes `runs/run_<timestamp>/weights/best.onnx` once training ends, and the log and the message banner show its path and size. The export runs on the CPU and takes a few seconds to a minute. Press Cancel export to skip it. If the export fails, the run still counts as finished and `best.pt` stays as it was; the banner tells you to retry with Export ONNX. A crashed run or a force stop skips the export.
@@ -69,6 +74,7 @@ Your settings live in `projects/<name>/settings.json` and come back when you reo
 
 | Keys | Action |
 | --- | --- |
+| F1 | Open Help |
 | Ctrl+N | Focus the model name |
 | Ctrl+O | Choose the dataset folder |
 | F5 | Validate and prepare |
@@ -80,7 +86,13 @@ Your settings live in `projects/<name>/settings.json` and come back when you reo
 | Ctrl+U | Check for updates |
 | Ctrl+Shift+L | Switch dark and light theme |
 
-Tab moves through every control. On the chart, use the arrow keys to read values epoch by epoch.
+Tab moves through every control. Enter or Space opens and closes a settings section. In Help, Ctrl+F jumps to the search box. On the chart, use the arrow keys to read values epoch by epoch.
+
+## Help
+
+Press F1 or click Help. Help opens in its own window, so you can keep it open while you work. It has six sections: Quick start, Settings explained, Understanding results, Choosing a model, Troubleshooting and Glossary. Type in the search box to see only the parts that mention your words. Links in the validation report and in error messages open the matching section.
+
+![The Help window](docs/help.png)
 
 ## Troubleshooting
 
@@ -111,7 +123,7 @@ If any step fails, the helper restores the backup and LocalTrainer tells you on 
 
 ## Publishing a release
 
-1. Bump `__version__` in `app/version.py`, for example to `1.0.1`.
+1. Bump `__version__` in `app/version.py`, for example to `1.0.1`, and add the changes to `CHANGELOG.md`.
 2. Commit: `git commit -am "Release 1.0.1"`.
 3. Tag: `git tag v1.0.1`.
 4. Push both: `git push origin main` and `git push origin v1.0.1`.
@@ -135,6 +147,8 @@ core/updater.py         release check, download, checksum, extraction
 core/env_check.py       CUDA and RTX 50-series support check
 core/gpu_monitor.py     live VRAM readout from nvidia-smi
 ui/                     main window, widgets, theme tokens and stylesheet
+ui/help_texts.py        every tooltip, preset and Help text, in one place
+ui/help_dialog.py       the F1 Help window
 utils/update_helper.py  replaces app files, rolls back on failure
 utils/shortcut.py       desktop shortcut (pythonw.exe, no console window)
 tools/installer/        source of the one-click installer exe

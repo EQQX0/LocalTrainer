@@ -17,7 +17,7 @@ def main() -> int:
 
     from app.version import APP_NAME, __version__
     from ui.main_window import MainWindow
-    from ui.theme import resolve_fonts
+    from ui.theme import AppStyle, resolve_fonts
     from utils.paths import ASSETS_DIR, ensure_dirs
     from utils.prefs import load_prefs
 
@@ -35,7 +35,7 @@ def main() -> int:
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(__version__)
     app.setWindowIcon(QIcon(str(ASSETS_DIR / "icon.svg")))
-    app.setStyle("Fusion")  # predictable base for the stylesheet on every Windows version
+    app.setStyle(AppStyle())  # Fusion: a predictable base for the stylesheet; 400 ms tooltip delay
     fonts = resolve_fonts()
     window = MainWindow(fonts, load_prefs())
     window.show()

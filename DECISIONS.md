@@ -89,3 +89,23 @@ Choices I made while building LocalTrainer v1.0.0, v1.0.1 and v1.0.2 unattended,
 - **The Windows release job builds the installer.** `csc.exe` exists only on Windows. The Ubuntu job still runs the tests and builds the zip, so the zip is built the same way as in earlier releases. The Windows job wraps that zip and publishes all four files. The updater picks the `.zip` asset and its exact-name `.sha256`, so the extra exe has no effect on updates.
 - **Long folder paths break pip.** My first installer test used a folder deep in `%TEMP%`, and pip stopped with `WinError 206`: one file in setuptools' test data passed Windows' 260-character limit. The installer reported "Setup did not finish" and exited. The default folder path is 93 characters shorter than the one that failed. The README tells you to keep a custom folder short.
 - **I tested the installer end to end on a scratch folder with a space and an apostrophe in its name.** The first run unpacked 36 files, installed PyTorch and then stopped halfway, when my test session ended. A second run found the install, skipped extraction, ran `setup.bat` again, installed the requirements, created the shortcut and started the app under `pythonw.exe`. The app reported "CUDA 12.8 ready" on the RTX 5070. A third run took 6 s: it skipped setup and started the app.
+
+## v1.1.0 (beginner mode)
+
+- Presets set family, size, epochs, image size, batch, auto batch and patience. LocalTrainer does not save the chosen preset. It works the preset out from the current values, so any edit shows Custom.
+- Section defaults for the modified dot and Reset come from TrainSettings, with a 20 % val split.
+- Section headers use the U+2212 minus sign so "+" and "−" have the same width.
+- The 400 ms tooltip delay is set in a QProxyStyle (AppStyle), so every widget gets it.
+- Reduced motion is read from LOCALTRAINER_REDUCED_MOTION or the Windows animation setting.
+- Validation problems show their fix as a tooltip and in a "How to fix" part of the report.
+- Enter and Space toggle a section header.
+- GPU memory figures in Help are rough guides, not measurements.
+- I skipped the design-taste-frontend skill. It targets marketing web pages, and LocalTrainer is a desktop app with its own design tokens.
+- CI installs the Qt system libraries so the widget tests run on ubuntu. test_auto_export now creates a QApplication instead of a QCoreApplication.
+- The chart draws its small text with its own font, not QApplication.font(), which differed from the stylesheet font and broke offscreen renders.
+- At 1100 px wide, or at 150 % scaling, the run tools (run picker, Open results, Test, Export) move to a second line under Start/Stop (WrapRow). The chart's minimum height dropped from 220 to 150 px so the tabs still fit at 1100x700.
+- Besides docs/screenshot.png, the README shows docs/help.png (Help window, dark theme) and docs/tooltip.png (a setting's explanation, light theme). I rendered all of them offscreen at 1440x900 and checked both themes at 1366x768, 1100x700 and 150 % scaling.
+- Offscreen renders put tooltips above their field, because the virtual screen is short. On a real screen Qt places them below.
+- I tested training for real: Quick test preset, epochs edited to 1 (the preset switched to Custom), COCO8, RTX 5070. The run wrote best.pt (5.5 MB) and best.onnx, and the COCO8 source folder stayed byte-identical. I deleted the test project afterwards.
+- gh on this machine stores its token under the account beboreport1-ops, while the API reports the user EQQX0. Pushes and releases work with that token, so I left it as it is.
+- docs/screenshot.png shows the sidebar scrolled to the Model essentials and the collapsed sections, with a tidied dataset path.

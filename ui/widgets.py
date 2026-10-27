@@ -1,16 +1,28 @@
-"""Reusable widgets: banners, stat tiles, empty states, class editor, metrics chart, log view, tasks."""
+"""Reusable widgets: banners, stat tiles, empty states, info labels, collapsible sections, class editor,
+metrics chart, log view, tasks."""
 from __future__ import annotations
 
+import os
+import sys
 from typing import Any, Callable
 
-from PyQt6.QtCore import QPointF, QRectF, Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QKeyEvent, QMouseEvent, QPainter, QPainterPath, QPen, QTextCursor
+from PyQt6.QtCore import (
+    QEasingCurve, QEvent, QObject, QPoint, QPointF, QPropertyAnimation, QRectF, Qt, QThread, QTimer, QUrl,
+    pyqtSignal,
+)
+from PyQt6.QtGui import (
+    QColor, QDesktopServices, QFont, QHelpEvent, QKeyEvent, QMouseEvent, QPainter, QPainterPath, QPen, QTextCursor,
+)
 from PyQt6.QtWidgets import (
-    QAbstractItemView, QApplication, QFrame, QHBoxLayout, QHeaderView, QLabel, QPlainTextEdit, QPushButton,
-    QSizePolicy, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QAbstractItemView, QBoxLayout, QFrame, QHBoxLayout, QLayout, QHeaderView, QLabel, QPlainTextEdit, QPushButton,
+    QSizePolicy, QTableWidget, QTableWidgetItem, QTextBrowser, QToolButton, QToolTip, QVBoxLayout, QWidget,
 )
 
+from ui.help_texts import BUTTONS, fixes_for, tip as wrap_tip
 from ui.theme import FONT_SIZE, SP1, SP2, SP3, THEMES
+
+TOOLTIP_DELAY_MS = 400
+SECTION_ANIM_MS = 180
 
 
 def label(text: str = "", role: str | None = None, wrap: bool = False) -> QLabel:
@@ -31,11 +43,98 @@ def button(text: str, kind: str | None = None, tooltip: str = "") -> QPushButton
     return btn
 
 
+def reduced_motion() -> bool:
+    """True when the user asked for less animation (env override, or Windows "Animation effects" off)."""
+    env = os.environ.get("LOCALTRAINER_REDUCED_MOTION")
+    if env is not None:
+        return env not in ("", "0", "false")
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            enabled = ctypes.c_int(1)
+            # SPI_GETCLIENTAREAANIMATION
+            if ctypes.windll.user32.SystemParametersInfoW(0x1042, 0, ctypes.byref(enabled), 0):
+                return not enabled.value
+        except (AttributeError, OSError):
+            pass
+    return False
+
+
+def show_tip_for(widget: QWidget) -> None:
+    """Show a widget's tooltip right under it, as hover would."""
+    text = widget.toolTip()
+    if text and widget.isVisible():
+        QToolTip.showText(widget.mapToGlobal(QPoint(0, widget.height() + 2)), text, widget)
+
+
+class FocusTip(QObject):
+    """Event filter: when a watched widget gets keyboard focus, show its tooltip after the hover delay."""
+
+    def __init__(self, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(TOOLTIP_DELAY_MS)
+        self._timer.timeout.connect(self._show)
+        self._target: QWidget | None = None
+
+    def watch(self, *widgets: QWidget) -> None:
+        for w in widgets:
+            w.installEventFilter(self)
+
+    def eventFilter(self, obj: QObject, ev: QEvent) -> bool:  # noqa: N802 - Qt override
+        if ev.type() == QEvent.Type.FocusIn and isinstance(obj, QWidget):
+            if ev.reason() in (Qt.FocusReason.TabFocusReason, Qt.FocusReason.BacktabFocusReason,
+                               Qt.FocusReason.ShortcutFocusReason):
+                self._target = obj
+                self._timer.start()
+        elif ev.type() == QEvent.Type.FocusOut and obj is self._target:
+            self._timer.stop()
+            self._target = None
+            QToolTip.hideText()
+        return False
+
+    def _show(self) -> None:
+        if self._target is not None and self._target.hasFocus():
+            show_tip_for(self._target)
+
+
 def repolish(widget: QWidget) -> None:
     """Re-apply the stylesheet after a dynamic property change."""
     widget.style().unpolish(widget)
     widget.style().polish(widget)
     widget.update()
+
+
+class WrapRow(QWidget):
+    """Two widget groups side by side that stack into two lines when the row is too narrow for both."""
+
+    def __init__(self, left: QWidget, right: QWidget, spacing: int = SP1, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.left, self.right = left, right
+        self._lay = QBoxLayout(QBoxLayout.Direction.LeftToRight, self)
+        self._lay.setContentsMargins(0, 0, 0, 0)
+        self._lay.setSpacing(spacing)
+        self._lay.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)  # the row may be narrower than both groups
+        self._lay.addWidget(left, 0, Qt.AlignmentFlag.AlignLeft)
+        self._lay.addStretch(1)
+        self._lay.addWidget(right, 0, Qt.AlignmentFlag.AlignLeft)
+
+    def is_wrapped(self) -> bool:
+        return self._lay.direction() == QBoxLayout.Direction.TopToBottom
+
+    def minimumSizeHint(self):  # noqa: N802 (Qt override)
+        hint = super().minimumSizeHint()
+        hint.setWidth(max(self.left.minimumSizeHint().width(), self.right.minimumSizeHint().width()))
+        return hint
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        need = self.left.sizeHint().width() + self._lay.spacing() + self.right.sizeHint().width()
+        fits = event.size().width() >= need
+        direction = QBoxLayout.Direction.LeftToRight if fits else QBoxLayout.Direction.TopToBottom
+        if direction != self._lay.direction():
+            self._lay.setDirection(direction)
+        super().resizeEvent(event)
 
 
 class Banner(QFrame):
@@ -72,7 +171,7 @@ class Banner(QFrame):
             if item and item.widget():
                 item.widget().deleteLater()
         for text, cb in actions or []:
-            b = button(text)
+            b = button(text, tooltip=wrap_tip(BUTTONS.get(text, "")))
             b.clicked.connect(cb)
             self.actions.addWidget(b)
         repolish(self)
@@ -103,9 +202,10 @@ class StatTile(QFrame):
 
 
 class EmptyState(QWidget):
-    """Left-aligned message in a readable column, vertically centred."""
+    """Left-aligned message in a readable column, vertically centred, with optional numbered steps."""
 
-    def __init__(self, title: str, body: str, steps: list[str] | None = None, parent: QWidget | None = None) -> None:
+    def __init__(self, title: str, body: str, steps: list[str] | None = None,
+                 learn_more: Callable[[], None] | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         outer = QHBoxLayout(self)
         outer.setContentsMargins(SP3, SP3, SP3, SP3)
@@ -120,11 +220,233 @@ class EmptyState(QWidget):
         self.body = label(body, "emptyBody", wrap=True)
         lay.addWidget(self.title)
         lay.addWidget(self.body)
-        for step in steps or []:
-            lay.addWidget(label(step, None, wrap=True))
+        if steps:
+            lay.addSpacing(SP1)
+            lay.addWidget(label("How it works", "heading"))
+            for i, step in enumerate(steps, 1):
+                row = QHBoxLayout()
+                row.setSpacing(SP2)
+                num = label(str(i), "step")
+                num.setFixedSize(24, 24)
+                num.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                num.setAccessibleName(f"Step {i}")
+                row.addWidget(num, 0, Qt.AlignmentFlag.AlignTop)
+                row.addWidget(label(step, None, wrap=True), 1)
+                lay.addLayout(row)
+        self.learn_more: QPushButton | None = None
+        if learn_more:
+            self.learn_more = button("Learn more in Help (F1)", "link", wrap_tip(BUTTONS["learn_more"]))
+            self.learn_more.clicked.connect(learn_more)
+            lay.addWidget(self.learn_more, 0, Qt.AlignmentFlag.AlignLeft)
         lay.addStretch(1)
         outer.addWidget(col, 3)
         outer.addStretch(1)
+
+
+class InfoLabel(QWidget):
+    """A form label followed by a focusable "?" button; the help text shows on hover, focus or click.
+
+    The same text is set as the tooltip of the label and of the buddy input, so hovering anywhere on
+    the row explains the setting."""
+
+    def __init__(self, text: str, tip_text: str, buddy: QWidget | None = None,
+                 parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.tip_text = wrap_tip(tip_text)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        self.label = QLabel(text)
+        self.label.setToolTip(self.tip_text)
+        self.info = QToolButton()
+        self.info.setText("?")
+        self.info.setProperty("kind", "info")
+        self.info.setFixedSize(20, 20)
+        self.info.setToolTip(self.tip_text)
+        self.info.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.info.setCursor(Qt.CursorShape.WhatsThisCursor)
+        self.info.setAccessibleName(f"Help: {text}")
+        self.info.setAccessibleDescription(tip_text)
+        self.info.clicked.connect(lambda: show_tip_for(self.info))
+        lay.addWidget(self.label)
+        lay.addWidget(self.info)
+        lay.addStretch(1)
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(TOOLTIP_DELAY_MS)
+        self._timer.timeout.connect(self._show_if_focused)
+        self.info.installEventFilter(self)
+        self.buddy = buddy
+        if buddy is not None:
+            self.label.setBuddy(buddy)
+            buddy.setToolTip(self.tip_text)
+            if not buddy.accessibleName():
+                buddy.setAccessibleName(text)
+            buddy.setAccessibleDescription(tip_text)
+
+    def _show_if_focused(self) -> None:
+        if self.info.hasFocus():
+            show_tip_for(self.info)
+
+    def eventFilter(self, obj: QObject, ev: QEvent) -> bool:  # noqa: N802 - Qt override
+        if obj is self.info:
+            if ev.type() == QEvent.Type.FocusIn:
+                self._timer.start()
+            elif ev.type() == QEvent.Type.FocusOut:
+                self._timer.stop()
+                QToolTip.hideText()
+        return False
+
+
+class CollapsibleSection(QWidget):
+    """A header button with + / \u2212 that shows or hides its content with a short height animation.
+
+    Values inside stay live while collapsed. A dot after the title marks values that differ from
+    their defaults, and a "Reset to defaults" link sits at the end of the content."""
+
+    toggled_state = pyqtSignal(bool)
+    reset_requested = pyqtSignal()
+
+    def __init__(self, sid: str, title: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.sid, self.title = sid, title
+        self._expanded = False
+        self._modified = False
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+
+        head = QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        head.setSpacing(SP1)
+        self.header = button("", "section")
+        self.header.setCheckable(True)
+        self.header.setToolTip(wrap_tip(f"Show or hide the {title.lower()}. Hidden values still apply."))
+        self.header.toggled.connect(self.set_expanded)
+        self.header.installEventFilter(self)  # Enter toggles too, not only Space
+        self.dot = label("", "dot")
+        self.dot.setFixedSize(8, 8)
+        self.dot.setToolTip("Changed from the defaults")
+        self.dot.hide()
+        head.addWidget(self.header, 1)
+        head.addWidget(self.dot, 0, Qt.AlignmentFlag.AlignVCenter)
+        head.addSpacing(SP1)
+        lay.addLayout(head)
+
+        self.content = QWidget()
+        self.body = QVBoxLayout(self.content)
+        self.body.setContentsMargins(SP1, SP1, 0, SP2)
+        self.body.setSpacing(SP1)
+        self.reset_btn = button("Reset to defaults", "link", wrap_tip(BUTTONS["reset"]))
+        self.reset_btn.setAccessibleName(f"Reset {title.lower()} to defaults")
+        self.reset_btn.setEnabled(False)
+        self.reset_btn.clicked.connect(self.reset_requested.emit)
+        reset_row = QHBoxLayout()
+        reset_row.addWidget(self.reset_btn)
+        reset_row.addStretch(1)
+        self.body.addLayout(reset_row)
+        lay.addWidget(self.content)
+        self.content.hide()
+
+        self._anim = QPropertyAnimation(self.content, b"maximumHeight", self)
+        self._anim.setDuration(SECTION_ANIM_MS)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim.finished.connect(self._anim_done)
+        self._sync_header()
+
+    def eventFilter(self, obj: QObject, ev: QEvent) -> bool:  # noqa: N802 - Qt override
+        if (obj is self.header and ev.type() == QEvent.Type.KeyPress and isinstance(ev, QKeyEvent)
+                and ev.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)):
+            self.header.toggle()
+            return True
+        return super().eventFilter(obj, ev)
+
+    def add_widget(self, widget: QWidget) -> None:
+        self.body.insertWidget(self.body.count() - 1, widget)
+
+    def add_layout(self, layout: Any) -> None:
+        self.body.insertLayout(self.body.count() - 1, layout)
+
+    def is_expanded(self) -> bool:
+        return self._expanded
+
+    def set_expanded(self, expanded: bool, animate: bool = True) -> None:
+        expanded = bool(expanded)
+        if expanded == self._expanded:
+            return
+        self._expanded = expanded
+        self.header.blockSignals(True)
+        self.header.setChecked(expanded)
+        self.header.blockSignals(False)
+        self._sync_header()
+        self._anim.stop()
+        if not animate or reduced_motion() or not self.isVisible():
+            self.content.setMaximumHeight(16777215)
+            self.content.setVisible(expanded)
+        elif expanded:
+            self.content.setMaximumHeight(0)
+            self.content.show()
+            self._anim.setStartValue(0)
+            self._anim.setEndValue(max(1, self.content.sizeHint().height()))
+            self._anim.start()
+        else:
+            self._anim.setStartValue(self.content.height())
+            self._anim.setEndValue(0)
+            self._anim.start()
+        self.toggled_state.emit(expanded)
+
+    def _anim_done(self) -> None:
+        if not self._expanded:
+            self.content.hide()
+        self.content.setMaximumHeight(16777215)  # free again, so the content can grow or relayout
+
+    def set_modified(self, modified: bool) -> None:
+        self._modified = bool(modified)
+        self.dot.setVisible(self._modified)
+        self.reset_btn.setEnabled(self._modified)
+        self._sync_header()
+
+    def is_modified(self) -> bool:
+        return self._modified
+
+    def _sync_header(self) -> None:
+        # U+2212 minus has the same advance as "+", so the title does not shift when toggled
+        self.header.setText(("\u2212 " if self._expanded else "+ ") + self.title)
+        state = "expanded" if self._expanded else "collapsed"
+        changed = ", changed from defaults" if self._modified else ""
+        self.header.setAccessibleName(f"{self.title}, {state}{changed}")
+
+
+class ReportView(QTextBrowser):
+    """Validation report. Hovering a problem line shows how to fix it; help: links ask for a Help page."""
+
+    help_requested = pyqtSignal(str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setOpenLinks(False)
+        self.anchorClicked.connect(self._on_link)
+
+    def fix_at(self, pos: QPoint) -> str | None:
+        line = self.cursorForPosition(pos).block().text()
+        found = fixes_for([line]) if line else []
+        return found[0][1] if found else None
+
+    def viewportEvent(self, ev: QEvent) -> bool:  # noqa: N802 - Qt override
+        if ev.type() == QEvent.Type.ToolTip and isinstance(ev, QHelpEvent):
+            fix = self.fix_at(ev.pos())
+            if fix:
+                QToolTip.showText(ev.globalPos(), wrap_tip(f"How to fix: {fix}"), self.viewport())
+            else:
+                QToolTip.hideText()
+            return True
+        return super().viewportEvent(ev)
+
+    def _on_link(self, url: QUrl) -> None:
+        if url.scheme() == "help":
+            self.help_requested.emit(url.path() + (f"#{url.fragment()}" if url.fragment() else ""))
+        elif url.scheme() in ("http", "https"):
+            QDesktopServices.openUrl(url)
 
 
 class ClassEditor(QWidget):
@@ -217,7 +539,7 @@ class MetricsChart(QWidget):
         self.map5095: list[tuple[int, float]] = []
         self.total_epochs = 0
         self.cursor_index: int | None = None
-        self.setMinimumHeight(220)
+        self.setMinimumHeight(150)  # leaves room for the tabs at 1100x700 with the action bar wrapped
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setToolTip("mAP50 per epoch. Hover, or focus and use the arrow keys, to read values.")
@@ -261,7 +583,7 @@ class MetricsChart(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.fillRect(self.rect(), QColor(t["surface"]))
         rect = self._plot_rect()
-        small = QFont(QApplication.font())
+        small = QFont(self.font())  # the stylesheet body font; the app default can differ
         small.setPixelSize(FONT_SIZE["small"])
         p.setFont(small)
 

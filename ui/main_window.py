@@ -13,7 +13,7 @@ from PyQt6.QtGui import QAction, QCloseEvent, QDesktopServices, QGuiApplication,
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow,
     QMenu, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSpinBox, QSplitter, QStackedWidget,
-    QTableWidget, QTableWidgetItem, QTabWidget, QTextBrowser, QVBoxLayout, QWidget,
+    QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from app.version import __version__
@@ -26,15 +26,24 @@ from core.project import FAMILIES, SIZES, Project, ProjectState, TrainSettings, 
 from core.trainer import OOM_HINT, TrainConfig, TrainingSession, make_run_name, resolve_device
 from core.updater import ReleaseInfo, UpdateError, cleanup_work_dirs, fetch_latest_release, is_newer
 from core.yaml_gen import write_data_yaml
+from ui.help_dialog import HelpDialog
+from ui.help_texts import (
+    BUTTONS, CUSTOM, EMPTY_BODY, EMPTY_STEPS, EMPTY_TITLE, METRICS, PRESET_TIPS, PRESETS, SECTIONS, SETTINGS,
+    fixes_for, tip,
+)
 from ui.theme import SP1, SP2, SP3, Fonts, build_qss
 from ui.update_dialog import UpdateDialog
-from ui.widgets import Banner, ClassEditor, EmptyState, LogView, MetricsChart, StatTile, Task, button, label, repolish
+from ui.widgets import (
+    Banner, ClassEditor, CollapsibleSection, EmptyState, FocusTip, InfoLabel, LogView, MetricsChart, ReportView,
+    StatTile, Task, WrapRow, button, label, repolish,
+)
 from utils.fmt import fmt_bytes, fmt_duration, fmt_metric
 from utils.paths import PROJECTS_DIR, UPDATE_STATUS_FILE
 from utils.prefs import save_prefs
 from utils.shortcut import create_desktop_shortcut
 
 SIDEBAR_WIDTH = 408
+DEFAULT_VAL_PERCENT = 20  # ProjectState.val_ratio default, as shown in the Val share box
 
 
 class BadgeButton(QPushButton):
@@ -107,6 +116,8 @@ class MainWindow(QMainWindow):
         self._loading = False
         self._run_started_at = 0.0
         self._current_run: Path | None = None
+        self.help_dialog: HelpDialog | None = None
+        self.focus_tip = FocusTip(self)
 
         self.session = TrainingSession(self)
         self.job = WorkerProcess(self)        # predict / export
@@ -140,13 +151,9 @@ class MainWindow(QMainWindow):
         body.setSpacing(0)
         body.addWidget(self._build_sidebar())
         self.right = QStackedWidget()
-        self.right.addWidget(EmptyState(
-            "Name your model to begin",
-            "Type a name such as helmets on the left and press Create. LocalTrainer makes a folder for it "
-            "under projects/ and keeps every training run there, side by side.",
-            ["Then pick your labelled dataset folder. It is checked and copied; the original is never changed.",
-             "Choose a model and settings, press Start training, and watch mAP50 climb epoch by epoch.",
-             "When it is done, test the best weights on an image, a folder or a video, or export them to ONNX."]))
+        self.empty_state = EmptyState(EMPTY_TITLE, EMPTY_BODY, EMPTY_STEPS,
+                                      learn_more=lambda: self.open_help("quickstart"))
+        self.right.addWidget(self.empty_state)
         self.right.addWidget(self._build_monitor())
         body.addWidget(self.right, 1)
         outer.addLayout(body, 1)
@@ -166,12 +173,14 @@ class MainWindow(QMainWindow):
         self.project_lbl = label("", "project")
         lay.addWidget(self.project_lbl)
         lay.addStretch(1)
-        self.theme_btn = button("Light theme", "ghost", "Switch between dark and light theme (Ctrl+Shift+L)")
+        self.help_btn = button("Help", "ghost", tip(BUTTONS["help"]))
+        lay.addWidget(self.help_btn)
+        self.theme_btn = button("Light theme", "ghost", tip(BUTTONS["theme"]))
         lay.addWidget(self.theme_btn)
         self.update_btn = BadgeButton("Check for updates")
         self.update_btn.setProperty("kind", "update")
         self.update_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.update_btn.setToolTip("Look for a newer LocalTrainer release on GitHub (Ctrl+U)")
+        self.update_btn.setToolTip(tip(BUTTONS["update"]))
         lay.addWidget(self.update_btn)
         return bar
 
@@ -195,7 +204,7 @@ class MainWindow(QMainWindow):
         self.name_edit.setToolTip("Letters, digits, - and _. This becomes the folder projects/<name>/ (Ctrl+N)")
         self.name_edit.setAccessibleName("Model name")
         self.name_edit.setMaxLength(64)
-        self.create_btn = button("Create", "primary", "Create the project folder, or open it if it exists")
+        self.create_btn = button("Create", "primary", tip(BUTTONS["create"]))
         row.addWidget(self.name_edit, 1)
         row.addWidget(self.create_btn)
         s.addLayout(row)
@@ -211,7 +220,7 @@ class MainWindow(QMainWindow):
         # ---- dataset
         self.dataset_sec, s = section("Dataset", "A folder with images/ and labels/ in YOLO format. "
                                                  "Your original files are only read, never changed.")
-        self.pick_btn = button("Choose dataset folder…", tooltip="Pick the folder that holds images/ and labels/ (Ctrl+O)")
+        self.pick_btn = button("Choose dataset folder…", tooltip=tip(BUTTONS["pick"]))
         s.addWidget(self.pick_btn)
         self.path_lbl = label("No folder chosen yet.", "muted", wrap=True)
         self.path_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -219,11 +228,6 @@ class MainWindow(QMainWindow):
         self.layout_lbl = label("", None, wrap=True)
         self.layout_lbl.hide()
         s.addWidget(self.layout_lbl)
-        f = form()
-        self.val_spin = spin(1, 90, 20, "Share of images used for validation when the folder is flat. "
-                             "The split uses a fixed random seed, so it is the same every time.", suffix=" %")
-        f.addRow("Val share", self.val_spin)
-        s.addLayout(f)
         self.classes_src = label("Classes", None)
         s.addWidget(self.classes_src)
         self.classes_hint = label("", "caption", wrap=True)
@@ -231,68 +235,100 @@ class MainWindow(QMainWindow):
         s.addWidget(self.classes_hint)
         self.class_editor = ClassEditor()
         s.addWidget(self.class_editor)
-        self.validate_btn = button("Validate and prepare", "primary",
-                                   "Check every image and label, then copy the dataset into the project and write "
-                                   "data.yaml (F5)")
+        self.validate_btn = button("Validate and prepare", "primary", tip(BUTTONS["validate"]))
         s.addWidget(self.validate_btn)
         self.validate_status = label("", None, wrap=True)
         self.validate_status.hide()
         s.addWidget(self.validate_status)
         lay.addWidget(self.dataset_sec)
 
-        # ---- model
-        self.model_sec, s = section("Model")
+        # ---- model: the essentials, always visible
+        self.model_sec, s = section("Model", "Pick a preset, or set the model yourself.")
         f = form()
+        self.preset_combo = QComboBox()
+        for i, name in enumerate([*PRESETS, CUSTOM]):
+            self.preset_combo.addItem(name)
+            self.preset_combo.setItemData(i, tip(PRESET_TIPS[name]), Qt.ItemDataRole.ToolTipRole)
         self.family_combo = QComboBox()
         self.family_combo.addItems(FAMILIES)
-        self.family_combo.setToolTip("YOLO generation. yolo26 is the newest; yolo11 and yolov8 are older and well tested.")
         self.size_combo = QComboBox()
         for code, word in zip(SIZES, ("nano", "small", "medium", "large", "extra large")):
             self.size_combo.addItem(f"{code}  {word}", code)
-        self.size_combo.setToolTip("Bigger models are more accurate but slower and use more GPU memory. "
-                                   "s is a good start on a 12 GB card.")
-        f.addRow("Family", self.family_combo)
-        f.addRow("Size", self.size_combo)
+        self.epochs_spin = spin(1, 3000, 100, "")
         s.addLayout(f)
         self.weights_lbl = label("", "caption", wrap=True)
         s.addWidget(self.weights_lbl)
         lay.addWidget(self.model_sec)
 
-        # ---- training settings
-        self.train_sec, s = section("Training")
-        f = form()
-        self.epochs_spin = spin(1, 3000, 100, "Number of full passes over the training images")
-        self.imgsz_spin = spin(64, 2048, 640, "Images are resized to this size in pixels. Multiples of 32.",
-                               step=32, suffix=" px")
-        brow = QHBoxLayout()
-        brow.setSpacing(SP2)
-        self.batch_spin = spin(1, 512, 16, "Images per training step. Lower it if the GPU runs out of memory.")
+        # ---- advanced settings, collapsed until opened
+        self.imgsz_spin = spin(64, 2048, 640, "", step=32, suffix=" px")
+        self.batch_spin = spin(1, 512, 16, "")
         self.batch_auto = QCheckBox("Auto")
-        self.batch_auto.setToolTip("Let Ultralytics pick the largest batch that fits in about 60 % of GPU memory")
-        brow.addWidget(self.batch_spin, 1)
-        brow.addWidget(self.batch_auto)
-        self.workers_spin = spin(0, 32, 4, "Processes that load images in the background. "
-                                 "Use 0 if training hangs before the first epoch.")
-        self.patience_spin = spin(0, 1000, 50, "Stop early when validation has not improved for this many epochs. "
-                                  "0 turns early stopping off.", suffix=" epochs")
+        self.batch_auto.setToolTip(tip("Let Ultralytics pick the largest batch that fits in about 60 % of GPU "
+                                       "memory. Handy when you do not know what fits."))
+        self.batch_auto.setAccessibleName("Automatic batch size")
+        self.workers_spin = spin(0, 32, 4, "")
+        self.patience_spin = spin(0, 1000, 50, "", suffix=" epochs")
         self.device_combo = QComboBox()
         self.device_combo.addItem("Auto", "auto")
         self.device_combo.addItem("GPU 0", "0")
         self.device_combo.addItem("CPU", "cpu")
-        self.device_combo.setToolTip("Auto uses the NVIDIA GPU when CUDA works and falls back to the CPU otherwise")
+        self.val_spin = spin(1, 90, DEFAULT_VAL_PERCENT, "", suffix=" %")
         self.auto_onnx_check = QCheckBox("Auto-export ONNX after training")
         self.auto_onnx_check.setChecked(True)
-        self.auto_onnx_check.setToolTip("When a run finishes, stops early or is stopped, export best.pt to best.onnx "
-                                        "in the same weights folder. A failed export keeps the run and its weights.")
-        f.addRow("Epochs", self.epochs_spin)
-        f.addRow("Image size", self.imgsz_spin)
-        f.addRow("Batch", brow)
-        f.addRow("Workers", self.workers_spin)
-        f.addRow("Patience", self.patience_spin)
-        f.addRow("Device", self.device_combo)
-        f.addRow("ONNX", self.auto_onnx_check)
-        s.addLayout(f)
-        lay.addWidget(self.train_sec)
+        brow = QHBoxLayout()
+        brow.setSpacing(SP2)
+        brow.addWidget(self.batch_spin, 1)
+        brow.addWidget(self.batch_auto)
+
+        # setting key -> input widget; every one gets an InfoLabel and the same tooltip
+        self.setting_widgets: dict[str, QWidget] = {
+            "preset": self.preset_combo, "family": self.family_combo, "size": self.size_combo,
+            "epochs": self.epochs_spin, "imgsz": self.imgsz_spin, "batch": self.batch_spin,
+            "patience": self.patience_spin, "workers": self.workers_spin, "device": self.device_combo,
+            "val": self.val_spin, "auto_onnx": self.auto_onnx_check,
+        }
+        self.info_labels: dict[str, InfoLabel] = {}
+
+        def add_row(fl: QFormLayout, key: str, field: QWidget | QHBoxLayout | None = None) -> None:
+            w = self.setting_widgets[key]
+            info = InfoLabel(SETTINGS[key]["label"], SETTINGS[key]["tip"], w)
+            self.info_labels[key] = info
+            fl.addRow(info, field if field is not None else w)
+
+        for key in ("preset", "family", "size", "epochs"):
+            add_row(f, key)
+
+        self.more_sec = QWidget()
+        more = QVBoxLayout(self.more_sec)
+        more.setContentsMargins(0, 0, 0, 0)
+        more.setSpacing(SP1)
+        head = QHBoxLayout()
+        head.setSpacing(SP1)
+        head.addWidget(label("More settings", "heading"))
+        head.addStretch(1)
+        self.show_all_btn = button("Show all", "link", tip(BUTTONS["show_all"]))
+        head.addWidget(self.show_all_btn)
+        more.addLayout(head)
+        more.addWidget(label("Optional. The defaults suit most datasets, and hidden values still apply.",
+                             "muted", wrap=True))
+        fields: dict[str, QWidget | QHBoxLayout] = {"batch": brow}
+        self.sections: dict[str, CollapsibleSection] = {}
+        open_state = self.prefs.get("sections") if isinstance(self.prefs.get("sections"), dict) else {}
+        for sid, title, keys in SECTIONS:
+            sec = CollapsibleSection(sid, title)
+            sf = form()
+            for key in keys:
+                add_row(sf, key, fields.get(key))
+            sec.add_layout(sf)
+            sec.set_expanded(bool(open_state.get(sid, False)), animate=False)
+            sec.toggled_state.connect(lambda expanded, sid=sid: self._section_toggled(sid, expanded))
+            sec.reset_requested.connect(lambda sid=sid: self._reset_section(sid))
+            self.sections[sid] = sec
+            more.addWidget(sec)
+        lay.addWidget(self.more_sec)
+        self.focus_tip.watch(self.batch_auto, *self.setting_widgets.values())
+        self._sync_show_all()
         lay.addStretch(1)
         scroll.setWidget(inner)
         return scroll
@@ -308,33 +344,38 @@ class MainWindow(QMainWindow):
         lay.addWidget(self.msg_banner)
 
         # actions
-        row = QHBoxLayout()
+        # training controls on the left, run tools on the right; they stack when the window is narrow
+        train_box = QWidget()
+        row = QHBoxLayout(train_box)
+        row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(SP1)
-        self.start_btn = button("Start training", "primary", "Train with the settings on the left (Ctrl+Enter)")
-        self.stop_btn = button("Stop training", "danger",
-                               "Stop after the current batch and keep the last saved weights (Ctrl+.). "
-                               "Press again to force stop.")
+        self.start_btn = button("Start training", "primary", tip(BUTTONS["start"]))
+        self.stop_btn = button("Stop training", "danger", tip(BUTTONS["stop"]))
         row.addWidget(self.start_btn)
         row.addWidget(self.stop_btn)
-        row.addStretch(1)
+        run_box = QWidget()
+        row = QHBoxLayout(run_box)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(SP1)
         self.run_combo = QComboBox()
-        self.run_combo.setMinimumWidth(220)
+        self.run_combo.setMinimumWidth(180)
         self.run_combo.setToolTip("Training run used by Open results, Test model and Export ONNX")
         self.run_combo.setAccessibleName("Training run")
         row.addWidget(self.run_combo)
-        self.results_btn = button("Open results folder", tooltip="Open the selected run folder in Explorer (Ctrl+R)")
-        self.test_btn = button("Test model", tooltip="Run the best weights on an image, a folder or a video (Ctrl+T)")
+        self.results_btn = button("Open results folder", tooltip=tip(BUTTONS["results"]))
+        self.test_btn = button("Test model", tooltip=tip(BUTTONS["test"]))
         test_menu = QMenu(self.test_btn)
         self.test_file_act = QAction("Image or video…", self)
         self.test_dir_act = QAction("Folder of images…", self)
         test_menu.addAction(self.test_file_act)
         test_menu.addAction(self.test_dir_act)
         self.test_btn.setMenu(test_menu)
-        self.export_btn = button("Export ONNX", tooltip="Export the best weights to ONNX next to best.pt (Ctrl+E)")
+        self.export_btn = button("Export ONNX", tooltip=tip(BUTTONS["export"]))
         row.addWidget(self.results_btn)
         row.addWidget(self.test_btn)
         row.addWidget(self.export_btn)
-        lay.addLayout(row)
+        self.action_row = WrapRow(train_box, run_box)
+        lay.addWidget(self.action_row)
 
         # progress
         prog = QVBoxLayout()
@@ -358,13 +399,9 @@ class MainWindow(QMainWindow):
         # stats
         stats = QHBoxLayout()
         stats.setSpacing(SP1)
-        self.tiles = {
-            "box_loss": StatTile("Box loss", "Training box regression loss for the last epoch. Lower is better."),
-            "map50": StatTile("mAP50", "Mean average precision at IoU 0.50 on the val split. Higher is better."),
-            "map50_95": StatTile("mAP50-95", "mAP averaged over IoU 0.50 to 0.95. The stricter, standard score."),
-            "precision": StatTile("Precision", "Share of predicted boxes that are correct"),
-            "recall": StatTile("Recall", "Share of real objects that were found"),
-        }
+        captions = {"box_loss": "Box loss", "map50": "mAP50", "map50_95": "mAP50-95",
+                    "precision": "Precision", "recall": "Recall"}
+        self.tiles = {key: StatTile(cap, tip(METRICS[key])) for key, cap in captions.items()}
         for t in self.tiles.values():
             stats.addWidget(t)
         lay.addLayout(stats)
@@ -373,6 +410,7 @@ class MainWindow(QMainWindow):
         split = QSplitter(Qt.Orientation.Vertical)
         split.setChildrenCollapsible(False)
         self.chart = MetricsChart()
+        self.chart.setToolTip(tip(METRICS["chart"]))
         split.addWidget(self.chart)
         self.tabs = QTabWidget()
         self.log = LogView()
@@ -384,8 +422,9 @@ class MainWindow(QMainWindow):
         self.epoch_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.epoch_table.setAlternatingRowColors(True)
         self.epoch_table.setAccessibleName("Metrics per epoch")
-        self.report_view = QTextBrowser()
+        self.report_view = ReportView()
         self.report_view.setAccessibleName("Validation report")
+        self.report_view.setToolTip(tip("Problems found in the dataset. Hover a problem to see how to fix it."))
         self.report_view.setPlaceholderText("Press Validate and prepare to check the dataset. "
                                             "The report lists images per split, boxes per class and any problems.")
         self.tabs.addTab(self.log, "Log")
@@ -421,6 +460,10 @@ class MainWindow(QMainWindow):
         self.validate_btn.clicked.connect(self._validate_and_prepare)
         self.class_editor.changed.connect(self._classes_changed)
         self.val_spin.valueChanged.connect(self._dataset_setting_changed)
+        self.preset_combo.activated.connect(self._preset_chosen)
+        self.show_all_btn.clicked.connect(self._toggle_all_sections)
+        self.report_view.help_requested.connect(self.open_help)
+        self.help_btn.clicked.connect(lambda: self.open_help())
         for w in (self.family_combo, self.size_combo, self.device_combo):
             w.currentIndexChanged.connect(self._settings_changed)
         for w in (self.epochs_spin, self.imgsz_spin, self.batch_spin, self.workers_spin, self.patience_spin):
@@ -462,6 +505,7 @@ class MainWindow(QMainWindow):
             act.triggered.connect(fn)
             self.addAction(act)
 
+        sc("F1", lambda: self.open_help())
         sc("Ctrl+N", lambda: (self.name_edit.setFocus(), self.name_edit.selectAll()))
         sc("Ctrl+O", lambda: self.pick_btn.isEnabled() and self._choose_dataset())
         sc("F5", lambda: self.validate_btn.isEnabled() and self._validate_and_prepare())
@@ -481,6 +525,8 @@ class MainWindow(QMainWindow):
         if isinstance(app, QApplication):
             app.setStyleSheet(build_qss(theme, self.fonts))
         self.chart.set_theme(theme, self.fonts.display)
+        if self.help_dialog is not None:
+            self.help_dialog.set_theme(theme)
         self.theme_btn.setText("Light theme" if theme == "dark" else "Dark theme")
         self.prefs["theme"] = theme
         save_prefs(self.prefs)
@@ -513,7 +559,8 @@ class MainWindow(QMainWindow):
             self.msg_banner.show_message("success", f"Updated to version {status.get('version')}",
                                          "Your projects and settings were kept.")
         else:
-            self.msg_banner.show_message("error", "The last update was rolled back", str(status.get("message", "")))
+            self.msg_banner.show_message("error", "The last update was rolled back", str(status.get("message", "")),
+                                         [("Help", lambda: self.open_help("troubleshooting#update"))])
 
     def _on_env(self, ev: dict[str, Any]) -> None:
         if ev.get("type") != "env":
@@ -532,7 +579,8 @@ class MainWindow(QMainWindow):
             self.env_banner.show_message(
                 "warning", "Training will run on the CPU, which is much slower",
                 f"{ev.get('problem') or 'CUDA is not available.'}\nTo fix it, run this in the LocalTrainer folder:\n{fix}",
-                [("Copy command", lambda: QGuiApplication.clipboard().setText(fix))])
+                [("Copy command", lambda: QGuiApplication.clipboard().setText(fix)),
+                 ("Help", lambda: self.open_help("troubleshooting#cuda"))])
         repolish(self.cuda_lbl)
 
     def _on_env_finished(self, code: int) -> None:
@@ -541,7 +589,8 @@ class MainWindow(QMainWindow):
             self.cuda_lbl.setText("CUDA: check failed")
             self.env_banner.show_message("warning", "The CUDA check could not run",
                                          f"Training falls back to the CPU. To repair PyTorch run:\n{FIX_COMMAND_VENV}",
-                                         [("Copy command", lambda: QGuiApplication.clipboard().setText(FIX_COMMAND_VENV))])
+                                         [("Copy command", lambda: QGuiApplication.clipboard().setText(FIX_COMMAND_VENV)),
+                                          ("Help", lambda: self.open_help("troubleshooting#cuda"))])
 
     def _on_gpu_sample(self, name: str, used: int, total: int, util: int) -> None:
         self.vram_lbl.setText(f"VRAM {used / 1024:.1f} of {total / 1024:.1f} GB · load {util} %")
@@ -611,7 +660,7 @@ class MainWindow(QMainWindow):
         self.info = None
         self._loading = True
         has = project is not None
-        for w in (self.dataset_sec, self.model_sec, self.train_sec):
+        for w in (self.dataset_sec, self.model_sec, self.more_sec):
             w.setVisible(has)  # progressive disclosure: settings appear once a project exists
         self.right.setCurrentIndex(1 if has else 0)
         if project is None:
@@ -647,6 +696,8 @@ class MainWindow(QMainWindow):
         self._refresh_project_list()
         self._refresh_runs()
         self._loading = False
+        self._refresh_modified()
+        self._sync_preset()
         self._update_actions()
 
     # ============================================================ settings
@@ -680,18 +731,114 @@ class MainWindow(QMainWindow):
 
     def _settings_changed(self, *_: Any) -> None:
         self._update_weights_label()
+        self._refresh_modified()
+        self._sync_preset()
         if self._loading or self.project is None or self.state is None:
             return
         self.state.train = self._read_settings()
         self.project.save_state(self.state)
 
     def _dataset_setting_changed(self, *_: Any) -> None:
+        self._refresh_modified()
         if self._loading or self.project is None or self.state is None:
             return
         self.state.val_ratio = self.val_spin.value() / 100
         if self.info is not None and self.info.layout is ds.Layout.FLAT:
             self._invalidate()
         self.project.save_state(self.state)
+
+    # ---- presets
+    def _preset_values(self) -> dict[str, Any]:
+        s = self._read_settings()
+        return {k: getattr(s, k) for k in next(iter(PRESETS.values()))}
+
+    def _sync_preset(self) -> None:
+        """Show the preset whose values match the inputs, or Custom."""
+        current = self._preset_values()
+        name = next((n for n, v in PRESETS.items() if v == current), CUSTOM)
+        self.preset_combo.blockSignals(True)
+        self.preset_combo.setCurrentText(name)
+        self.preset_combo.blockSignals(False)
+        self.preset_combo.setToolTip(tip(f"{SETTINGS['preset']['tip']}\n\nNow: {name}. {PRESET_TIPS[name]}"))
+
+    def _preset_chosen(self, index: int) -> None:
+        values = PRESETS.get(self.preset_combo.itemText(index))
+        if values is None:  # Custom: keep the current values
+            self._sync_preset()
+            return
+        was_loading, self._loading = self._loading, True
+        self.family_combo.setCurrentText(values["family"])
+        self.size_combo.setCurrentIndex(SIZES.index(values["size"]))
+        self.epochs_spin.setValue(values["epochs"])
+        self.imgsz_spin.setValue(values["imgsz"])
+        self.batch_spin.setValue(values["batch"])
+        self.batch_auto.setChecked(values["batch_auto"])
+        self.patience_spin.setValue(values["patience"])
+        self._loading = was_loading
+        self._settings_changed()
+
+    # ---- collapsible sections
+    def _section_defaults(self) -> dict[str, bool]:
+        """Section id -> whether any value inside differs from a fresh project."""
+        d = TrainSettings()
+        return {
+            "training": (self.imgsz_spin.value(), self.batch_spin.value(), self.batch_auto.isChecked(),
+                         self.patience_spin.value(), self.workers_spin.value())
+                        != (d.imgsz, d.batch, d.batch_auto, d.patience, d.workers),
+            "hardware": self.device_combo.currentData() != d.device,
+            "data": self.val_spin.value() != DEFAULT_VAL_PERCENT,
+            "output": self.auto_onnx_check.isChecked() != d.auto_export_onnx,
+        }
+
+    def _refresh_modified(self) -> None:
+        for sid, modified in self._section_defaults().items():
+            self.sections[sid].set_modified(modified)
+
+    def _reset_section(self, sid: str) -> None:
+        if self.session.is_running():
+            return
+        d = TrainSettings()
+        if sid == "data":
+            self.val_spin.setValue(DEFAULT_VAL_PERCENT)  # saves through _dataset_setting_changed
+            self._refresh_modified()
+            return
+        was_loading, self._loading = self._loading, True
+        if sid == "training":
+            self.imgsz_spin.setValue(d.imgsz)
+            self.batch_spin.setValue(d.batch)
+            self.batch_auto.setChecked(d.batch_auto)
+            self.patience_spin.setValue(d.patience)
+            self.workers_spin.setValue(d.workers)
+        elif sid == "hardware":
+            self.device_combo.setCurrentIndex(max(0, self.device_combo.findData(d.device)))
+        elif sid == "output":
+            self.auto_onnx_check.setChecked(d.auto_export_onnx)
+        self._loading = was_loading
+        self._settings_changed()
+
+    def _section_toggled(self, sid: str, expanded: bool) -> None:
+        state = self.prefs.get("sections")
+        if not isinstance(state, dict):
+            state = self.prefs["sections"] = {}
+        state[sid] = expanded
+        save_prefs(self.prefs)
+        self._sync_show_all()
+
+    def _sync_show_all(self) -> None:
+        all_open = all(sec.is_expanded() for sec in self.sections.values())
+        self.show_all_btn.setText("Hide all" if all_open else "Show all")
+        self.show_all_btn.setAccessibleName("Hide all settings sections" if all_open else "Show all settings sections")
+
+    def _toggle_all_sections(self) -> None:
+        target = not all(sec.is_expanded() for sec in self.sections.values())
+        for sec in self.sections.values():
+            sec.set_expanded(target)
+
+    # ---- help
+    def open_help(self, target: str = "quickstart") -> None:
+        if self.help_dialog is None:
+            self.help_dialog = HelpDialog(self.theme, self.fonts, self)
+        self.help_dialog.open_section(target)
 
     def _classes_changed(self) -> None:
         if self._loading or self.project is None or self.state is None:
@@ -793,7 +940,7 @@ class MainWindow(QMainWindow):
     def _on_validated(self, result: object, names: list[str]) -> None:
         rep, counts = result  # type: ignore[misc]
         self._set_busy_dataset(False)
-        self.report_view.setMarkdown(ds.report_text(rep, names))
+        self.report_view.setMarkdown(self._report_with_fixes(rep, names))
         self.tabs.setCurrentWidget(self.report_view)
         assert self.state is not None and self.project is not None
         if rep.ok and counts is not None:
@@ -807,6 +954,16 @@ class MainWindow(QMainWindow):
             self._set_validate_status("error", f"{len(rep.errors)} problem(s) block training. See the validation report.")
         self.project.save_state(self.state)
         self._update_actions()
+
+    @staticmethod
+    def _report_with_fixes(rep: ds.ValidationReport, names: list[str]) -> str:
+        text = ds.report_text(rep, names)
+        fixes = fixes_for(list(rep.errors) + list(rep.warnings))
+        if fixes:
+            text += "\n\n## How to fix\n" + "\n".join(f"- {fix}" for _line, fix in fixes)
+        if rep.errors or rep.warnings:
+            text += "\n\n[Help: fixing dataset problems](help:troubleshooting#validation)"
+        return text
 
     def _set_busy_dataset(self, busy: bool) -> None:
         for w in (self.pick_btn, self.validate_btn, self.class_editor, self.val_spin, self.start_btn):
@@ -858,13 +1015,12 @@ class MainWindow(QMainWindow):
         run = self._selected_run()
         has_weights = bool(run and find_weights(run))
         self.start_btn.setEnabled(prepared and not training)
-        self.start_btn.setToolTip("Train with the settings on the left (Ctrl+Enter)" if prepared else
-                                  "Validate and prepare the dataset first")
+        self.start_btn.setToolTip(tip(BUTTONS["start"] if prepared else BUTTONS["start_blocked"]))
         self.stop_btn.setEnabled(training)
         self.results_btn.setEnabled(bool(self.project))
         self.test_btn.setEnabled(has_weights and not job)
         self.export_btn.setEnabled(has_weights and not job)
-        for w in (self.model_sec, self.train_sec, self.pick_btn, self.validate_btn, self.class_editor,
+        for w in (self.model_sec, self.more_sec, self.pick_btn, self.validate_btn, self.class_editor,
                   self.create_btn, self.name_edit, self.open_combo):
             w.setEnabled(not training and (bool(self.project) or w in (self.create_btn, self.name_edit, self.open_combo)))
         if self.info is None or self.info.layout is not ds.Layout.FLAT:
@@ -1019,10 +1175,12 @@ class MainWindow(QMainWindow):
             s = self._read_settings()
             tips = f"Current settings: batch {'auto' if s.batch_auto else s.batch}, image size {s.imgsz} px."
             self.msg_banner.show_message("error", "Out of GPU memory", f"{OOM_HINT}\n{tips}",
-                                         [("Halve the batch", self._halve_batch)])
+                                         [("Halve the batch", self._halve_batch),
+                                          ("Help", lambda: self.open_help("troubleshooting#oom"))])
             QMessageBox.warning(self, "Out of GPU memory", f"{OOM_HINT}\n\n{tips}")
         else:
-            self.msg_banner.show_message("error", "Training failed", message[:1500])
+            self.msg_banner.show_message("error", "Training failed", message[:1500],
+                                         [("Help", lambda: self.open_help("troubleshooting#training"))])
         self.log.append_line(message)
         self._refresh_runs()
 
@@ -1144,8 +1302,8 @@ class MainWindow(QMainWindow):
         self.update_btn.setText(f"Update to {version}" if available else "Check for updates")
         self.update_btn.setProperty("available", "true" if available else "false")
         self.update_btn.set_badge(available)
-        self.update_btn.setToolTip(f"Version {version} is available. Click to see what changed (Ctrl+U)"
-                                   if available else "Look for a newer LocalTrainer release on GitHub (Ctrl+U)")
+        self.update_btn.setToolTip(tip(f"Version {version} is available. Click to see what changed (Ctrl+U)"
+                                       if available else BUTTONS["update"]))
         repolish(self.update_btn)
 
     # ============================================================ close

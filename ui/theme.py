@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from PyQt6.QtGui import QColor, QFontDatabase
+from PyQt6.QtWidgets import QProxyStyle, QStyle, QStyleFactory
 
 from utils.paths import ASSETS_DIR
 
@@ -247,4 +248,58 @@ QMenu {{ background: {t['raised']}; border: none; padding: 4px; }}
 QMenu::item {{ padding: 6px 16px; border-radius: {r['sm']}px; }}
 QMenu::item:selected {{ background: {t['selection']}; color: {t['ink']}; }}
 QMessageBox QLabel {{ min-width: 320px; }}
+
+/* ---------- progressive disclosure and help ---------- */
+QPushButton[kind="section"] {{
+    background: transparent; text-align: left; padding: 6px 4px;
+    font-family: "{fonts.display}"; font-size: {fs['title']}px; font-weight: 600;
+}}
+QPushButton[kind="section"]:hover {{ background: {t['hover']}; }}
+QPushButton[kind="link"] {{
+    background: transparent; color: {t['accent_ink']}; padding: 2px 0px; min-height: 0px; text-align: left;
+}}
+QPushButton[kind="link"]:hover {{ background: transparent; text-decoration: underline; }}
+QPushButton[kind="link"]:focus {{ border-color: {t['accent_ink']}; }}
+QToolButton[kind="info"] {{
+    background: {t['raised']}; color: {t['ink_muted']}; font-size: {fs['small']}px; font-weight: 700;
+    padding: 0px; min-height: 0px; min-width: 0px; width: 16px; height: 16px; border-radius: 9px;
+}}
+QToolButton[kind="info"]:hover {{ background: {t['hover']}; color: {t['ink']}; }}
+QLabel[role="dot"] {{ background: {t['accent_ink']}; border-radius: 4px; }}
+QLabel[role="step"] {{
+    font-family: "{fonts.display}"; font-weight: 600; color: {t['on_accent']}; background: {t['accent']};
+    border-radius: {r['sm']}px;
+}}
+QLineEdit#HelpSearch {{ min-height: 28px; }}
+QListWidget#HelpNav {{ background: {t['surface']}; }}
+QListWidget#HelpNav::item {{ padding: 8px 12px; }}
+QTextBrowser#HelpBody {{ background: {t['surface']}; padding: 8px 16px; }}
 """
+
+
+def help_css(theme: str, fonts: Fonts) -> str:
+    """Rich-text stylesheet for help pages and the validation report (QTextDocument CSS subset)."""
+    t = THEMES[theme]
+    return f"""
+body {{ color: {t['ink']}; font-family: "{fonts.body}"; font-size: {FONT_SIZE['body']}px; }}
+h2 {{ font-family: "{fonts.display}"; font-size: {FONT_SIZE['heading']}px; font-weight: 600; margin-top: 4px; }}
+h3 {{ font-family: "{fonts.display}"; font-size: {FONT_SIZE['title']}px; font-weight: 600; margin-top: 16px; }}
+p, li {{ line-height: 140%; }}
+a {{ color: {t['accent_ink']}; }}
+th {{ background: {t['raised']}; color: {t['ink_muted']}; }}
+td {{ border-bottom: 1px solid {t['raised']}; }}
+"""
+
+
+class AppStyle(QProxyStyle):
+    """Fusion with a 400 ms tooltip delay, short enough to feel responsive and long enough not to flicker."""
+
+    TOOLTIP_DELAY_MS = 400
+
+    def __init__(self) -> None:
+        super().__init__(QStyleFactory.create("Fusion"))
+
+    def styleHint(self, hint, option=None, widget=None, returnData=None):  # noqa: N802 - Qt override
+        if hint == QStyle.StyleHint.SH_ToolTip_WakeUpDelay:
+            return self.TOOLTIP_DELAY_MS
+        return super().styleHint(hint, option, widget, returnData)

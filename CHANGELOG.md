@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.1.0
+
+### Added
+
+- **Simple view.** The sidebar shows only what you need to start: model name, dataset folder, family, size, epochs and Start training. Training, Hardware, Data and Output settings sit in sections that start closed. Click a header, or press Enter or Space on it, to open it. Show all and Hide all open or close every section at once. LocalTrainer remembers which sections you left open.
+- **Presets.** Easy, Quick test and Best accuracy fill in the model and training settings for you. Change any of those values and the preset switches to Custom.
+- **Reset per section.** A dot on a section header means a value inside differs from the default. Reset to defaults puts that section back.
+- **A "?" next to every setting.** Hover it or tab to it and an explanation in plain words appears after a short delay. Tiles, the chart, the buttons and the validation report have explanations too.
+- **Help (F1).** Press F1 or the Help button for a guide with six sections: Quick start, Settings explained, Understanding results, Choosing a model, Troubleshooting and a glossary. Type in the search box to filter it. The validation report and error messages link to the matching Help section.
+- **First-start guide.** Before you open a project, the main area shows the three steps to a first model.
+
+### Changed
+
+- When the window is narrow or Windows scales the screen to 150 %, the run tools (run picker, Open results, Test, Export) move to a second line under Start and Stop.
+- The chart needs less height, so the tabs stay visible at 1100x700.
+
+Training, the settings files and your datasets work as in 1.0.3.
+
 ## 1.0.3
 
 ### Added
