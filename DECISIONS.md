@@ -1,6 +1,6 @@
 # Decisions
 
-Choices I made while building LocalTrainer v1.0.0 and v1.0.1 unattended, with the reason for each.
+Choices I made while building LocalTrainer v1.0.0, v1.0.1 and v1.0.2 unattended, with the reason for each.
 
 ## Setup and publishing
 
@@ -63,12 +63,12 @@ Choices I made while building LocalTrainer v1.0.0 and v1.0.1 unattended, with th
 - **Corrupt download test.** Using the installed copy's `stage_update`, I streamed the live v1.0.1 zip with one byte flipped and checked it against the real `.sha256` asset. It raised `ChecksumError` before extracting anything, and the 82 app files kept their hashes. A control run without the flip staged cleanly.
 - **Temp folders stayed behind in 1.0.1.** The updater stages each download in `%TEMP%\LocalTrainer-update-<timestamp>` and no step deleted it. I deleted the folders my tests made, along with the scratch install. The next section adds the cleanup.
 
-## Unreleased: temp folder cleanup
+## 1.0.2: temp folder and log cleanup
 
 - **Three places delete staging folders.** The helper deletes its own folder after it writes `update_status.json` and before it restarts the app. The update dialog deletes the folder when a download fails or you cancel it. At startup the app sweeps `%TEMP%` for `LocalTrainer-update-*` folders on a background thread, so a slow disk cannot freeze the window.
 - **The startup sweep skips folders changed in the last hour.** LocalTrainer has no single-instance lock. A second window could be downloading an update into one of those folders, or the helper could still be copying files out of it during a long `pip install`.
 - **The helper now starts in the app folder.** My first real check failed: the helper logged "Could not delete" and left an empty folder. The venv's `python.exe` is a launcher. It starts the real interpreter as a child process and holds its own working directory, the work folder, until the child exits. Starting the helper with the app folder as its working directory fixed it. The helper runs with `-I`, which keeps the working directory off `sys.path`, so nothing else changes.
 - **Deletion checks the folder name.** The app and the helper each refuse to delete a folder whose name lacks `LocalTrainer-update-`, so a wrong path cannot reach `projects/` or the app folder.
-- **The update to the next version still leaves one folder.** The installed 1.0.1 code runs that update and has no cleanup. The new version deletes that folder on its first start an hour or more later.
+- **The update to 1.0.2 still leaves one folder and an untrimmed log.** The installed 1.0.1 code runs that update and has neither cleanup. 1.0.2 deletes the folder on its first start an hour or more later and trims the log at the next update.
 - **`update.log` keeps the last 3 updates.** Each update appends a few lines, plus up to 8,000 characters of pip output when `requirements.txt` changed, and no step trimmed the file. The helper now cuts it at the start of each update, at the "Updating to" line that opens every update in 1.0.0 and later, so it never splits an update's entries. Three matches the number of backups kept in `update_backups/`. The helper writes the trimmed log to a temporary file and swaps it in, and it ignores any error there: a log file must not stop an update.
 - **Real check.** I staged a package in a real `%TEMP%\LocalTrainer-update-<timestamp>` folder and started the copied helper the way `launch_helper` does: `-I`, no window, a new process group. The helper applied the update, kept `projects/` and `settings.json`, and deleted its folder. I then planted a two-day-old folder and a fresh one, and `cleanup_work_dirs()` deleted only the old one. A headless app start deleted a second planted old folder. No `LocalTrainer-update-*` folders remain in `%TEMP%`.
