@@ -109,3 +109,5 @@ Choices I made while building LocalTrainer v1.0.0, v1.0.1 and v1.0.2 unattended,
 - I tested training for real: Quick test preset, epochs edited to 1 (the preset switched to Custom), COCO8, RTX 5070. The run wrote best.pt (5.5 MB) and best.onnx, and the COCO8 source folder stayed byte-identical. I deleted the test project afterwards.
 - gh on this machine stores its token under the account beboreport1-ops, while the API reports the user EQQX0. Pushes and releases work with that token, so I left it as it is.
 - docs/screenshot.png shows the sidebar scrolled to the Model essentials and the collapsed sections, with a tidied dataset path.
+- I tested the updater live: a throwaway v1.0.3 install (with a junction to the repo's `.venv`) found, downloaded, verified and applied the published v1.1.0 release, then relaunched. `projects/` and `settings.json` stayed byte-identical through the update itself. In the full run the relaunched 1.1.0 app then added its window geometry to `settings.json` when it closed, which every version does. I unlinked the junction before deleting the install.
+- The first release workflow run for v1.1.0 passed, so no CI fix was needed.
