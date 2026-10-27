@@ -93,7 +93,7 @@ LocalTrainer checks GitHub quietly at startup and marks the Check for updates bu
 
 The dialog also deletes the temporary folder when a download fails or you cancel it. At startup, LocalTrainer deletes `%TEMP%\LocalTrainer-update-*` folders older than an hour, such as ones a crash left behind.
 
-If any step fails, the helper restores the backup and LocalTrainer tells you on the next start. The updater never touches `projects/`, `settings.json`, `.venv` or downloaded weights, and it needs no admin rights. It also handles no internet, GitHub's rate limit of 60 checks per hour and a release without assets.
+If any step fails, the helper restores the backup and LocalTrainer tells you on the next start. The helper writes each step to `update.log` in the LocalTrainer folder and keeps the last 3 updates there. The updater never touches `projects/`, `settings.json`, `.venv` or downloaded weights, and it needs no admin rights. It also handles no internet, GitHub's rate limit of 60 checks per hour and a release without assets.
 
 ## Publishing a release
 

@@ -25,6 +25,8 @@ PROTECTED = {
     "update_backups", "update_status.json", "update.log", ".git",
 }
 KEEP_BACKUPS = 3
+KEEP_LOGGED_UPDATES = 3  # update.log keeps this many updates, the current one included
+LOG_START = "Updating to "  # first message of every update, in every version of this helper
 WORK_DIR_PREFIX = "LocalTrainer-update-"  # same as core.updater; this file cannot import the app
 
 LogFn = Callable[[str], None]
@@ -162,6 +164,27 @@ def prune_backups(root: Path, keep: int = KEEP_BACKUPS) -> None:
         shutil.rmtree(old, ignore_errors=True)
 
 
+def trim_log(log_file: Path, keep: int) -> None:
+    """Drop all but the last ``keep`` updates from update.log. Never raises: a log must not stop an update."""
+    try:
+        lines = Path(log_file).read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+    except OSError:
+        return
+    starts = [i for i, line in enumerate(lines) if line.partition("] ")[2].startswith(LOG_START)]
+    if len(starts) <= keep:
+        return
+    first = starts[-keep] if keep > 0 else len(lines)
+    tmp = Path(log_file).with_name(Path(log_file).name + ".tmp")
+    try:
+        tmp.write_text("".join(lines[first:]), encoding="utf-8")
+        os.replace(tmp, log_file)
+    except OSError:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def remove_work_dir(work_dir: Path, log: LogFn) -> None:
     """Delete the temp folder that held the download and this script (Python has already read it)."""
     work_dir = Path(work_dir)
@@ -190,7 +213,8 @@ def run(source: Path, target: Path, version: str, pid: int = 0, do_relaunch: boo
         with open(log_file, "a", encoding="utf-8") as fh:
             fh.write(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}\n")
 
-    log(f"Updating to {version} from {source}")
+    trim_log(log_file, KEEP_LOGGED_UPDATES - 1)
+    log(f"{LOG_START}{version} from {source}")
     wait_for_pid(pid)
     python = find_venv_python(target)
     old_req = requirements_hash(target / "requirements.txt")

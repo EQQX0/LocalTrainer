@@ -372,6 +372,59 @@ def test_run_keeps_work_dir_without_update_prefix(tmp_path: Path) -> None:
     assert ok and tmp_path.is_dir() and source.is_dir()
 
 
+def write_log(path: Path, versions: list[str]) -> None:
+    lines = []
+    for v in versions:
+        lines += [f"[2026-10-01 12:00:00] Updating to {v} from C:\\tmp\\x\n",
+                  "[2026-10-01 12:00:01] Moved main.py to the backup\n",
+                  "pip output without a timestamp\n",
+                  f"[2026-10-01 12:00:02] Updated to version {v}.\n"]
+    path.write_text("".join(lines), encoding="utf-8")
+
+
+def logged_updates(path: Path) -> list[str]:
+    return [line.split("Updating to ")[1].split(" ")[0]
+            for line in path.read_text(encoding="utf-8").splitlines() if "] Updating to " in line]
+
+
+def test_trim_log_keeps_last_updates_whole(tmp_path: Path) -> None:
+    log = tmp_path / "update.log"
+    write_log(log, ["1.0.1", "1.0.2", "1.0.3", "1.0.4"])
+    helper.trim_log(log, 2)
+    text = log.read_text(encoding="utf-8")
+    assert logged_updates(log) == ["1.0.3", "1.0.4"]
+    assert text.startswith("[2026-10-01 12:00:00] Updating to 1.0.3")
+    assert text.count("pip output without a timestamp") == 2
+    assert not (tmp_path / "update.log.tmp").exists()
+
+
+def test_trim_log_leaves_short_or_missing_log(tmp_path: Path) -> None:
+    log = tmp_path / "update.log"
+    helper.trim_log(log, 2)  # no file yet
+    assert not log.exists()
+    write_log(log, ["1.0.1", "1.0.2"])
+    before = log.read_bytes()
+    helper.trim_log(log, 2)
+    assert log.read_bytes() == before
+
+
+def test_trim_log_zero_empties_the_log(tmp_path: Path) -> None:
+    log = tmp_path / "update.log"
+    write_log(log, ["1.0.1"])
+    helper.trim_log(log, 0)
+    assert log.read_text(encoding="utf-8") == ""
+
+
+def test_run_trims_update_log(tmp_path: Path) -> None:
+    target = tmp_path / "LocalTrainer"
+    make_installed_app(target)
+    write_log(target / "update.log", ["1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5"])
+    source = extracted_package(tmp_path)
+    assert helper.run(source, target, "1.0.6", do_relaunch=False, pip=lambda *a: True)
+    assert logged_updates(target / "update.log") == ["1.0.4", "1.0.5", "1.0.6"]
+    assert helper.KEEP_LOGGED_UPDATES == 3
+
+
 def test_launch_helper_passes_work_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     app_root = tmp_path / "app"
     (app_root / "utils").mkdir(parents=True)
