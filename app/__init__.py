@@ -1,0 +1,1 @@
+"""LocalTrainer application package."""

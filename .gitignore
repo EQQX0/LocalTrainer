@@ -1,0 +1,30 @@
+# virtual environments
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# user data and training output (never committed, never replaced by updates)
+projects/
+runs/
+weights/
+*.pt
+*.onnx
+settings.json
+.ultralytics/
+.cache/
+
+# updater
+update_backups/
+update.log
+update_status.json
+
+# build output
+dist/
+*.zip
+*.sha256
+.taste-skill/
