@@ -39,6 +39,7 @@ class TrainSettings:
     workers: int = 4
     patience: int = 50
     device: str = "auto"  # auto | 0 | cpu
+    auto_export_onnx: bool = True  # settings files from 1.0.0 lack the key and get the default
 
     @property
     def weights(self) -> str:

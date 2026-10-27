@@ -13,7 +13,7 @@ LocalTrainer is a Windows desktop app for training YOLO object detection models 
 - Checks every label before training: missing labels, class ids out of range, values outside 0 to 1. Errors block training until you fix them.
 - Shows live progress, the Ultralytics log, box loss, precision, recall, mAP50 and mAP50-95 per epoch, and a mAP50 chart.
 - Tests the best weights on an image, a folder or a video and opens the annotated result.
-- Exports the best weights to ONNX.
+- Exports `best.pt` to `best.onnx` when a run ends, whether it finished, stopped early or you stopped it. You can turn this off, and the Export ONNX button still works.
 - Updates itself from GitHub releases with a SHA-256 check and automatic rollback.
 
 ## Requirements
@@ -43,10 +43,11 @@ py -3.13 -m venv .venv
 2. **Choose the dataset folder.** Point it at the folder that holds `images/` and `labels/`. The sidebar shows the layout it found. For a flat folder, set the val share (20 % by default).
 3. **Check the classes.** LocalTrainer fills the list from `classes.txt` or `data.yaml`. Without either file, it counts the class ids in your labels and asks you to name each one, in id order.
 4. **Validate and prepare.** LocalTrainer checks every image and label and shows a report with boxes per class, missing labels and invalid files. A clean dataset gets copied to `projects/<name>/dataset/`, and LocalTrainer writes `projects/<name>/data.yaml` with absolute paths.
-5. **Pick the model and settings.** Family (yolo26, yolo11, yolov8) and size (n, s, m, l, x) build the weights name, for example `yolo26s.pt`. The defaults are 100 epochs, 640 px, batch 16, 4 workers and patience 50. Tick Auto to let Ultralytics choose the batch size. Hover any setting for an explanation.
+5. **Pick the model and settings.** Family (yolo26, yolo11, yolov8) and size (n, s, m, l, x) build the weights name, for example `yolo26s.pt`. The defaults are 100 epochs, 640 px, batch 16, 4 workers and patience 50. Tick Auto to let Ultralytics choose the batch size. Auto-export ONNX after training is on by default. Hover any setting for an explanation.
 6. **Start training.** The progress bar, log, metric tiles and chart update live. The window stays responsive because training runs in a separate process.
 7. **Stop if you need to.** Stop training finishes the current batch, validates, and saves `last.pt` and `best.pt`. Press it a second time to force stop; the run keeps any weights saved so far.
-8. **Use the result.** Open results folder shows the run. Test model runs `best.pt` on an image, a folder or a video. Export ONNX writes `best.onnx` next to `best.pt`.
+8. **Get the ONNX file.** With Auto-export ONNX ticked, LocalTrainer writes `runs/run_<timestamp>/weights/best.onnx` once training ends, and the log and the message banner show its path and size. The export runs on the CPU and takes a few seconds to a minute. Press Cancel export to skip it. If the export fails, the run still counts as finished and `best.pt` stays as it was; the banner tells you to retry with Export ONNX. A crashed run or a force stop skips the export.
+9. **Use the result.** Open results folder shows the run. Test model runs `best.pt` on an image, a folder or a video. Export ONNX writes `best.onnx` next to `best.pt` at any time.
 
 Your settings live in `projects/<name>/settings.json` and come back when you reopen the project.
 

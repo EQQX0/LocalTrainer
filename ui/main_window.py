@@ -27,7 +27,7 @@ from core.yaml_gen import write_data_yaml
 from ui.theme import SP1, SP2, SP3, Fonts, build_qss
 from ui.update_dialog import UpdateDialog
 from ui.widgets import Banner, ClassEditor, EmptyState, LogView, MetricsChart, StatTile, Task, button, label, repolish
-from utils.fmt import fmt_duration, fmt_metric
+from utils.fmt import fmt_bytes, fmt_duration, fmt_metric
 from utils.paths import PROJECTS_DIR, UPDATE_STATUS_FILE
 from utils.prefs import save_prefs
 
@@ -277,12 +277,17 @@ class MainWindow(QMainWindow):
         self.device_combo.addItem("GPU 0", "0")
         self.device_combo.addItem("CPU", "cpu")
         self.device_combo.setToolTip("Auto uses the NVIDIA GPU when CUDA works and falls back to the CPU otherwise")
+        self.auto_onnx_check = QCheckBox("Auto-export ONNX after training")
+        self.auto_onnx_check.setChecked(True)
+        self.auto_onnx_check.setToolTip("When a run finishes, stops early or is stopped, export best.pt to best.onnx "
+                                        "in the same weights folder. A failed export keeps the run and its weights.")
         f.addRow("Epochs", self.epochs_spin)
         f.addRow("Image size", self.imgsz_spin)
         f.addRow("Batch", brow)
         f.addRow("Workers", self.workers_spin)
         f.addRow("Patience", self.patience_spin)
         f.addRow("Device", self.device_combo)
+        f.addRow("ONNX", self.auto_onnx_check)
         s.addLayout(f)
         lay.addWidget(self.train_sec)
         lay.addStretch(1)
@@ -418,6 +423,7 @@ class MainWindow(QMainWindow):
         for w in (self.epochs_spin, self.imgsz_spin, self.batch_spin, self.workers_spin, self.patience_spin):
             w.valueChanged.connect(self._settings_changed)
         self.batch_auto.toggled.connect(self._settings_changed)
+        self.auto_onnx_check.toggled.connect(self._settings_changed)
         self.start_btn.clicked.connect(self._start_training)
         self.stop_btn.clicked.connect(self._stop_training)
         self.results_btn.clicked.connect(self._open_results)
@@ -433,6 +439,7 @@ class MainWindow(QMainWindow):
         self.session.batch_progress.connect(self._on_batch)
         self.session.epoch_metrics.connect(self._on_epoch)
         self.session.stopping.connect(lambda: self.phase_lbl.setText("Stopping after this batch…"))
+        self.session.exporting.connect(self._on_train_exporting)
         self.session.finished.connect(self._on_train_finished)
         self.session.failed.connect(self._on_train_failed)
 
@@ -645,6 +652,7 @@ class MainWindow(QMainWindow):
         self.patience_spin.setValue(s.patience)
         idx = self.device_combo.findData(s.device)
         self.device_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.auto_onnx_check.setChecked(s.auto_export_onnx)
         self._update_weights_label()
 
     def _read_settings(self) -> TrainSettings:
@@ -653,6 +661,7 @@ class MainWindow(QMainWindow):
             epochs=self.epochs_spin.value(), imgsz=self.imgsz_spin.value(), batch=self.batch_spin.value(),
             batch_auto=self.batch_auto.isChecked(), workers=self.workers_spin.value(),
             patience=self.patience_spin.value(), device=self.device_combo.currentData(),
+            auto_export_onnx=self.auto_onnx_check.isChecked(),
         )
 
     def _update_weights_label(self) -> None:
@@ -884,7 +893,7 @@ class MainWindow(QMainWindow):
         cfg = TrainConfig(
             data_yaml=str(self.project.data_yaml), weights=s.weights, epochs=s.epochs, imgsz=s.imgsz,
             batch=-1 if s.batch_auto else s.batch, workers=s.workers, patience=s.patience, device=device,
-            runs_dir=str(self.project.runs_dir), run_name=make_run_name(),
+            runs_dir=str(self.project.runs_dir), run_name=make_run_name(), auto_export_onnx=s.auto_export_onnx,
         )
         self._current_run = cfg.run_dir
         self._reset_monitor(s.epochs)
@@ -903,8 +912,11 @@ class MainWindow(QMainWindow):
     def _stop_training(self) -> None:
         if not self.session.is_running():
             return
+        exporting = self.session.is_exporting()
         forced = self.session.request_stop()
-        if forced:
+        if exporting:
+            self.phase_lbl.setText("Cancelling the ONNX export…")
+        elif forced:
             self.phase_lbl.setText("Force stopping…")
         else:
             self.phase_lbl.setText("Stopping after this batch…")
@@ -953,23 +965,38 @@ class MainWindow(QMainWindow):
         if epochs:
             self.progress.setValue(int(epoch / epochs * 1000))
 
+    def _on_train_exporting(self) -> None:
+        self.progress.setRange(0, 0)
+        self.phase_lbl.setText("Exporting to ONNX…")
+        self.detail_lbl.setText("Training is saved. Stop cancels only the export.")
+        self.stop_btn.setText("Cancel export")
+
     def _on_train_finished(self, res: dict[str, Any]) -> None:
         self.progress.setRange(0, 1000)
         save_dir = Path(res.get("save_dir") or (self._current_run or ""))
         best, last = res.get("best"), res.get("last")
         elapsed = fmt_duration(time.monotonic() - self._run_started_at)
         actions = [("Open results folder", lambda: self._open_path(save_dir))]
+        onnx, onnx_error = res.get("onnx"), res.get("onnx_error")
+        onnx_line = f"\nONNX: {onnx} ({fmt_bytes(float(res.get('onnx_size') or 0))})" if onnx else ""
+        if onnx_error:
+            onnx_line = (f"\nONNX export failed: {str(onnx_error).rstrip('.')}. "
+                         "The weights are fine; press Export ONNX to try again.")
         if res.get("stopped"):
             self.phase_lbl.setText("Training stopped")
             kept = Path(best or last).name if (best or last) else None
             body = (f"Kept the last saved weights ({kept}) in {save_dir}." if kept else
                     "It stopped before the first epoch finished, so there are no weights to keep.")
-            self.msg_banner.show_message("info", "Training stopped", body, actions if kept else None)
+            kind = "warning" if onnx_error else "info"
+            self.msg_banner.show_message(kind, "Training stopped", body + onnx_line, actions if kept else None)
         else:
             self.progress.setValue(1000)
             self.phase_lbl.setText("Training finished")
-            self.msg_banner.show_message("success", f"Training finished in {elapsed}",
-                                         f"Best weights: {best or 'not found'}", actions)
+            title = f"Training finished in {elapsed}"
+            if onnx_error:
+                title += ", ONNX export failed"
+            self.msg_banner.show_message("warning" if onnx_error else "success", title,
+                                         f"Best weights: {best or 'not found'}{onnx_line}", actions)
         self.detail_lbl.setText(save_dir.name)
         self.stop_btn.setText("Stop training")
         self._refresh_runs(select=save_dir if save_dir.is_dir() else None)
@@ -1059,7 +1086,9 @@ class MainWindow(QMainWindow):
             self._open_path(target)
         elif kind == "done":
             out = Path(str(ev.get("path", "")))
-            self.msg_banner.show_message("success", "Exported to ONNX", str(out),
+            size = f" ({fmt_bytes(float(ev['size']))})" if ev.get("size") else ""
+            self.log.append_line(f"Exported ONNX: {out}{size}")
+            self.msg_banner.show_message("success", "Exported to ONNX", f"{out}{size}",
                                          [("Show folder", lambda: self._open_path(out.parent))])
         elif kind == "error":
             title = "Testing failed" if getattr(self, "_job_kind", "") == "predict" else "Export failed"

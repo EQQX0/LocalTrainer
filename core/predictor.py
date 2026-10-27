@@ -64,14 +64,23 @@ def run_prediction(payload: dict[str, Any], emit: EmitFn, stop_event: Any) -> in
         return 1
 
 
+def export_onnx(weights: Path | str, imgsz: int) -> Path:
+    """Export weights to ONNX next to them (best.pt -> best.onnx). Raises on failure."""
+    from ultralytics import YOLO
+
+    model = YOLO(str(weights))
+    out = model.export(format="onnx", imgsz=int(imgsz), device="cpu")
+    path = Path(str(out)) if out else Path(weights).with_suffix(".onnx")
+    if not path.is_file():
+        raise RuntimeError(f"Ultralytics reported success but {path} does not exist")
+    return path
+
+
 def run_export(payload: dict[str, Any], emit: EmitFn, stop_event: Any) -> int:
     """payload: weights, imgsz. Writes best.onnx next to the weights."""
     try:
-        from ultralytics import YOLO
-
-        model = YOLO(payload["weights"])
-        out = model.export(format="onnx", imgsz=int(payload.get("imgsz", 640)), device="cpu")
-        emit({"type": "done", "path": str(out)})
+        out = export_onnx(payload["weights"], int(payload.get("imgsz", 640)))
+        emit({"type": "done", "path": str(out), "size": out.stat().st_size})
         return 0
     except Exception as exc:
         emit({"type": "error", "kind": "other", "message": f"{type(exc).__name__}: {exc}",

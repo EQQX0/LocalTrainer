@@ -17,6 +17,7 @@ from typing import Any, Callable
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
 from core.jobs import WorkerProcess
+from utils.fmt import fmt_bytes
 from utils.paths import WEIGHTS_DIR
 
 EmitFn = Callable[[dict[str, Any]], None]
@@ -58,6 +59,7 @@ class TrainConfig:
     device: str           # "0" or "cpu"
     runs_dir: str
     run_name: str
+    auto_export_onnx: bool = True
 
     @property
     def run_dir(self) -> Path:
@@ -163,16 +165,33 @@ def run_training(payload: dict[str, Any], emit: EmitFn, stop_event: Any) -> int:
         model.train(**cfg.train_kwargs())
         trainer = model.trainer
         save_dir = Path(trainer.save_dir)
+        best = Path(trainer.best)
         emit({"type": "done", "save_dir": str(save_dir),
-              "best": str(trainer.best) if Path(trainer.best).exists() else "",
+              "best": str(best) if best.exists() else "",
               "last": str(trainer.last) if Path(trainer.last).exists() else "",
               "stopped": bool(state["stopping"])})
-        return 0
     except Exception as exc:
         text = f"{type(exc).__name__}: {exc}"
         kind = "oom" if is_oom_text(text) else "other"
         emit({"type": "error", "kind": kind, "message": text, "traceback": traceback.format_exc()})
         return 1
+    # "done" goes out first, so the run counts as finished even if the export fails or crashes
+    if cfg.auto_export_onnx and best.is_file():
+        auto_export(best, cfg.imgsz, emit)
+    return 0
+
+
+def auto_export(best: Path, imgsz: int, emit: EmitFn) -> None:
+    """Export best.pt to best.onnx after training. Failures are reported, never raised."""
+    from core.predictor import export_onnx
+
+    emit({"type": "export_start", "weights": str(best)})
+    try:
+        out = export_onnx(best, imgsz)
+        emit({"type": "export_done", "path": str(out), "size": out.stat().st_size})
+    except Exception as exc:
+        emit({"type": "export_failed", "message": f"{type(exc).__name__}: {exc}",
+              "traceback": traceback.format_exc()})
 
 
 # ------------------------------------------------------------ Qt session
@@ -185,7 +204,8 @@ class TrainingSession(QObject):
     batch_progress = pyqtSignal(int, int, int, int)  # epoch, epochs, batch i, batches per epoch
     epoch_metrics = pyqtSignal(dict)
     stopping = pyqtSignal()
-    finished = pyqtSignal(dict)         # {"save_dir", "best", "last", "stopped", "forced"}
+    exporting = pyqtSignal()            # training is saved, the ONNX export has started
+    finished = pyqtSignal(dict)         # {"save_dir", "best", "last", "stopped", "forced", "onnx", "onnx_size", "onnx_error"}
     failed = pyqtSignal(str, str)       # kind ("oom", "other", "crash"), message
 
     def __init__(self, parent: QObject | None = None) -> None:
@@ -195,6 +215,7 @@ class TrainingSession(QObject):
         self._tail: deque[str] = deque(maxlen=40)
         self._done: dict[str, Any] | None = None
         self._error: dict[str, Any] | None = None
+        self._export: dict[str, Any] | None = None  # export_start, then export_done or export_failed
         self._stop_requested = False
         self._restarting = False
         self._retried_workers = False
@@ -206,6 +227,9 @@ class TrainingSession(QObject):
     def is_running(self) -> bool:
         return self._worker is not None and self._worker.is_running()
 
+    def is_exporting(self) -> bool:
+        return self.is_running() and self._export is not None and self._export.get("type") == "export_start"
+
     def start(self, cfg: TrainConfig) -> None:
         self.cfg = cfg
         self._retried_workers = False
@@ -213,7 +237,7 @@ class TrainingSession(QObject):
 
     def _launch(self) -> None:
         assert self.cfg is not None
-        self._done = self._error = None
+        self._done = self._error = self._export = None
         self._stop_requested = self._restarting = self._got_batch = False
         self._tail.clear()
         self._worker = WorkerProcess(self)
@@ -226,6 +250,9 @@ class TrainingSession(QObject):
         """First call stops gracefully after the current batch. Second call kills. Returns True if forced."""
         if not self.is_running() or self._worker is None:
             return False
+        if self.is_exporting():  # the weights are saved already: cancelling the export loses nothing
+            self._worker.kill()
+            return True
         if not self._stop_requested:
             self._stop_requested = True
             self._worker.request_stop()
@@ -267,6 +294,19 @@ class TrainingSession(QObject):
             self._done = ev
         elif kind == "error":
             self._error = ev
+        elif kind == "export_start":
+            self._export = ev
+            self.log.emit(f"Exporting {Path(str(ev.get('weights', ''))).name} to ONNX", False)
+            self.exporting.emit()
+        elif kind == "export_done":
+            self._export = ev
+            self.log.emit(f"Exported ONNX: {ev.get('path')} ({fmt_bytes(float(ev.get('size') or 0))})", False)
+        elif kind == "export_failed":
+            self._export = ev
+            self.log.emit(f"ONNX export failed: {ev.get('message')}. The training run and its weights are fine; "
+                          "you can retry with Export ONNX.", False)
+            if ev.get("traceback"):
+                self.log.emit(str(ev["traceback"]).rstrip(), False)
 
     def _on_hang(self) -> None:
         if self._got_batch or self._worker is None or self.cfg is None:
@@ -289,7 +329,7 @@ class TrainingSession(QObject):
             return
         run_dir = str(self.cfg.run_dir)
         if self._done is not None:
-            self.finished.emit({**self._done, "forced": False})
+            self.finished.emit({**self._done, "forced": False, **self._export_result(code, killed)})
         elif killed:
             weights = self.cfg.run_dir / "weights"
             last = weights / "last.pt"
@@ -304,6 +344,22 @@ class TrainingSession(QObject):
             tail = "\n".join(self._tail)
             kind = "oom" if is_oom_text(tail) else "crash"
             self.failed.emit(kind, f"The training process exited with code {code}.\n\n{tail[-2000:]}")
+
+    def _export_result(self, code: int, killed: bool) -> dict[str, Any]:
+        """ONNX fields for the finished signal. Empty when no export ran."""
+        ev = self._export
+        if ev is None:
+            return {}
+        if ev.get("type") == "export_done":
+            return {"onnx": str(ev.get("path", "")), "onnx_size": int(ev.get("size") or 0)}
+        if ev.get("type") == "export_failed":
+            return {"onnx_error": str(ev.get("message", ""))}
+        # export_start without a result: cancelled or the process died mid-export
+        partial = Path(str(ev.get("weights", ""))).with_suffix(".onnx")
+        if partial.name.endswith(".onnx") and partial.is_file():
+            partial.unlink(missing_ok=True)  # half-written file from this export, not a training weight
+        reason = "The ONNX export was cancelled." if killed else f"The export process exited with code {code}."
+        return {"onnx_error": reason}
 
     @staticmethod
     def _cleanup_empty_run(run_dir: Path) -> None:

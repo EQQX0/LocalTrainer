@@ -1,6 +1,6 @@
 # Decisions
 
-Choices I made while building LocalTrainer v1.0.0 unattended, with the reason for each.
+Choices I made while building LocalTrainer v1.0.0 and v1.0.1 unattended, with the reason for each.
 
 ## Setup and publishing
 
@@ -44,7 +44,17 @@ Choices I made while building LocalTrainer v1.0.0 unattended, with the reason fo
 - **Helper process.** The app copies `utils/update_helper.py` (standard library only) to the temp folder and starts it with the venv's Python and `-I`, detached and without a window. It waits for the app's PID to exit, then relaunches through `run.bat`.
 - **Verification.** The download must match the `.sha256` asset. The zip extractor rejects paths that escape the target folder, and the package's `app/version.py` must match the release tag.
 
+## 1.0.1: auto-export ONNX
+
+- **The export runs in the training worker, after it reports "done".** The worker already has Ultralytics loaded, so the export skips a second process start and a second torch import. The window gets the "done" event first and knows the run succeeded before the export begins.
+- **The export always runs on the CPU** (`device="cpu"`). ONNX export gains nothing from the GPU, and the CPU path avoids a CUDA memory spike right after training.
+- **Stop during the export cancels only the export.** The app kills the worker at once, deletes the partial `best.onnx` and reports the run as finished. Waiting for a graceful end made no sense: the export has no checkpoint to save.
+- **A force stop during training skips the export.** `best.pt` may be half written when the process dies, and exporting it could fail or produce a broken model.
+- **A failed export shows a warning banner, not an error.** The run's weights are fine, so the title still reads "Training finished", with "ONNX export failed" appended and a hint to retry with Export ONNX.
+- **New requirements.** `onnx` and `onnxslim` were already listed for the manual export. I added `onnxruntime>=1.20` so you can run the exported model, and so the updater test exercises a real `pip install` on a requirements change.
+- **The option lives in each project's `settings.json`** with the other training settings. A 1.0.0 file has no key for it, and the loader gives missing keys their default, which is on.
+
 ## Verification notes
 
-- `projects/coco8_e2e/` holds the runs from my end-to-end checks (1 epoch to `best.pt`, a graceful stop after epoch 2, prediction, ONNX export). It is gitignored; delete it whenever you like. `.cache/coco8/` holds the downloaded COCO8 sample.
 - `main.py` quits on its own when `LOCALTRAINER_SMOKE=1` is set. The headless smoke test uses this.
+- The coco8 test projects and the downloaded COCO8 sample from the 1.0.0 and 1.0.1 checks are deleted.
