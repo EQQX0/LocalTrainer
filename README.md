@@ -25,9 +25,23 @@ LocalTrainer is a Windows desktop app for training YOLO object detection models 
 
 ## Setup
 
-1. Download `LocalTrainer-<version>.zip` from the [latest release](https://github.com/EQQX0/LocalTrainer/releases/latest) and unzip it, or clone the repository.
-2. Double-click `setup.bat`. It creates `.venv`, installs PyTorch with CUDA 12.8, then installs `requirements.txt`. The first run downloads about 3 GB.
-3. Double-click `run.bat` to start LocalTrainer.
+Download `LocalTrainer-Setup-<version>.exe` from the [latest release](https://github.com/EQQX0/LocalTrainer/releases/latest) and double-click it. The installer:
+
+1. Unpacks LocalTrainer to `%LOCALAPPDATA%\Programs\LocalTrainer`. It needs no admin rights.
+2. Runs `setup.bat` there, which creates `.venv`, installs PyTorch with CUDA 12.8 and then `requirements.txt`. The first install downloads about 3 GB.
+3. Puts a LocalTrainer shortcut on your desktop and starts the app.
+
+From then on, start LocalTrainer from the desktop shortcut. The installer is unsigned, so Windows may show "Windows protected your PC". Click More info, then Run anyway.
+
+To install into another folder, pass it on the command line: `LocalTrainer-Setup-1.0.3.exe "D:\Apps\LocalTrainer"`. Keep that path short. pip fails on file paths longer than 260 characters unless you turned on long paths in Windows. If you run the installer on an existing install, it keeps your projects, settings and `.venv`. It finishes a setup that stopped halfway, then starts the app. The in-app updater handles newer versions.
+
+### Setup from the zip
+
+1. Download `LocalTrainer-<version>.zip` from the latest release and unzip it, or clone the repository.
+2. Double-click `setup.bat`. It does step 2 above and adds the desktop shortcut.
+3. Start LocalTrainer from the desktop shortcut or with `run.bat`. The shortcut starts it without a console window.
+
+If you delete the desktop shortcut, LocalTrainer leaves it deleted. Run `setup.bat` again to get it back.
 
 If you prefer the command line, setup runs these commands:
 
@@ -102,7 +116,7 @@ If any step fails, the helper restores the backup and LocalTrainer tells you on 
 3. Tag: `git tag v1.0.1`.
 4. Push both: `git push origin main` and `git push origin v1.0.1`.
 
-The GitHub Actions workflow in `.github/workflows/release.yml` runs the tests, builds `LocalTrainer-1.0.1.zip` (app code only, no venv, projects or models) with `tools/build_release.py`, writes `LocalTrainer-1.0.1.zip.sha256`, and publishes both on a new release with generated notes. The workflow fails if the tag and `app/version.py` disagree.
+The GitHub Actions workflow in `.github/workflows/release.yml` runs the tests, builds `LocalTrainer-1.0.1.zip` (app code only, no venv, projects or models) with `tools/build_release.py`, and writes `LocalTrainer-1.0.1.zip.sha256`. A Windows job then wraps the zip in `LocalTrainer-Setup-1.0.1.exe` with `tools/build_installer.py` and publishes all four files on a new release with generated notes. The workflow fails if the tag and `app/version.py` disagree.
 
 PyTorch with CUDA is several GB, above GitHub's 2 GiB asset limit, so releases ship source only and `setup.bat` installs PyTorch on your machine.
 
@@ -122,6 +136,8 @@ core/env_check.py       CUDA and RTX 50-series support check
 core/gpu_monitor.py     live VRAM readout from nvidia-smi
 ui/                     main window, widgets, theme tokens and stylesheet
 utils/update_helper.py  replaces app files, rolls back on failure
+utils/shortcut.py       desktop shortcut (pythonw.exe, no console window)
+tools/installer/        source of the one-click installer exe
 tests/                  unit tests (pytest)
 tools/build_release.py  builds the release zip and checksum
 ```

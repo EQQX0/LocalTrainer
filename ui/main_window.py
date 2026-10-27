@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -31,6 +32,7 @@ from ui.widgets import Banner, ClassEditor, EmptyState, LogView, MetricsChart, S
 from utils.fmt import fmt_bytes, fmt_duration, fmt_metric
 from utils.paths import PROJECTS_DIR, UPDATE_STATUS_FILE
 from utils.prefs import save_prefs
+from utils.shortcut import create_desktop_shortcut
 
 SIDEBAR_WIDTH = 408
 
@@ -489,6 +491,11 @@ class MainWindow(QMainWindow):
         self.env_job.start("envcheck", {})
         self._show_update_status()
         threading.Thread(target=cleanup_work_dirs, name="update-cleanup", daemon=True).start()
+        if not self.prefs.get("desktop_shortcut") and not os.environ.get("LOCALTRAINER_SMOKE"):
+            # once per install: a shortcut you deleted stays deleted (setup.bat makes it again)
+            self.prefs["desktop_shortcut"] = True
+            save_prefs(self.prefs)
+            threading.Thread(target=create_desktop_shortcut, name="desktop-shortcut", daemon=True).start()
         last = self.prefs.get("last_project")
         if last and (PROJECTS_DIR / last).is_dir():
             self._open_project(last)

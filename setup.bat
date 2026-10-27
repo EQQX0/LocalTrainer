@@ -32,7 +32,9 @@ echo Installing LocalTrainer requirements ...
 echo.
 ".venv\Scripts\python.exe" -c "import torch; ok = torch.cuda.is_available(); print('CUDA available:', ok, '-', torch.cuda.get_device_name(0) if ok else 'training will use the CPU')"
 echo.
-echo Setup finished. Start LocalTrainer with run.bat
+".venv\Scripts\python.exe" -m utils.shortcut --replace
+echo.
+echo Setup finished. Start LocalTrainer from the desktop shortcut or with run.bat
 if /i not "%~1"=="/nopause" pause
 exit /b 0
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.3
+
+### Added
+
+- **One-click installer.** Each release now has `LocalTrainer-Setup-<version>.exe`. Double-click it to install LocalTrainer to `%LOCALAPPDATA%\Programs\LocalTrainer`, run the setup, add the desktop shortcut and start the app. Running it on an existing install keeps your projects and settings.
+- **Desktop shortcut.** `setup.bat` puts a LocalTrainer shortcut with the app icon on your desktop. It starts the app without a console window. Installs that already ran setup get the shortcut on their first start after the update, once. If you delete it, it stays deleted.
+
 ## 1.0.2
 
 ### Fixed

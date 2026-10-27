@@ -8,7 +8,7 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -28,12 +28,43 @@ jobs:
       - name: Build zip and SHA-256 checksum
         run: python tools/build_release.py --tag "${GITHUB_REF_NAME}" --out dist
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  # csc.exe from .NET Framework 4 exists only on Windows, so the installer is built here around the zip from above
+  release:
+    needs: build
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Build installer exe and SHA-256 checksum
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          python tools/build_installer.py --zip "dist/LocalTrainer-${VERSION}.zip" --out dist
+
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           gh release create "${GITHUB_REF_NAME}" \
+            "dist/LocalTrainer-Setup-${VERSION}.exe" \
+            "dist/LocalTrainer-Setup-${VERSION}.exe.sha256" \
             "dist/LocalTrainer-${VERSION}.zip" \
             "dist/LocalTrainer-${VERSION}.zip.sha256" \
             --title "LocalTrainer ${VERSION}" \
